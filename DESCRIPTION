@@ -1,0 +1,36 @@
+Package: rcreg
+Type: Package
+Title: Random Coefficient Regression Models for Repeated Measurements
+Version: 0.1.0
+Authors@R: c(
+    person("Your", "Name", email = "your.email@example.com", role = c("aut", "cre"))
+    )
+Description: Provides a high-level interface for fitting random coefficient
+    regression models (random intercept and random slope linear mixed models)
+    for repeated measurement data. The package simplifies the specification of
+    longitudinal mixed models by wrapping 'lme4', offering convenient functions
+    for model fitting, summarization, prediction, and diagnostics. Designed
+    specifically for repeated measures with random intercepts, random slopes,
+    and their covariance structures.
+License: MIT + file LICENSE
+Encoding: UTF-8
+LazyData: true
+Depends:
+    R (>= 3.5.0)
+Imports:
+    lme4 (>= 1.1-0),
+    stats,
+    methods
+Suggests:
+    ggplot2,
+    nlme,
+    broom.mixed,
+    testthat (>= 3.0.0),
+    knitr,
+    rmarkdown
+RoxygenNote: 7.2.3
+Roxygen: list(markdown = TRUE)
+VignetteBuilder: knitr
+URL: https://github.com/yourusername/rcreg
+BugReports: https://github.com/yourusername/rcreg/issues
+Config/testthat/edition: 3

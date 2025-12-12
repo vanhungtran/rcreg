@@ -1,0 +1,288 @@
+---
+title: "Quick Start Guide to rcreg"
+output: rmarkdown::html_vignette
+vignette: >
+  %\VignetteIndexEntry{Quick Start Guide to rcreg}
+  %\VignetteEngine{knitr::rmarkdown}
+  %\VignetteEncoding{UTF-8}
+---
+
+```{r, include = FALSE}
+knitr::opts_chunk$set(
+  collapse = TRUE,
+  comment = "#>",
+  fig.width = 7,
+  fig.height = 5
+)
+```
+
+```{r setup}
+library(rcreg)
+
+# Ensure example dataset is available when building the vignette
+if (!exists("sim_rcr")) {
+  if ("sim_rcr" %in% utils::data(package = "rcreg")$results[, "Item"]) {
+    data(sim_rcr, package = "rcreg")
+  } else {
+    # Fallback: generate the simulated dataset (matches data-raw/create_data.R)
+    set.seed(123)
+    n_subjects <- 100
+    n_timepoints <- 5
+    beta0 <- 10
+    beta1 <- 2
+    beta_x1 <- 1.5
+    sigma_b0 <- 2
+    sigma_b1 <- 1
+    rho <- 0.25
+    sigma_e <- 2
+
+    sim_rcr <- data.frame(id = integer(), time = numeric(), x1 = numeric(), y = numeric())
+
+    for (i in seq_len(n_subjects)) {
+      z <- rnorm(2)
+      b0i <- sigma_b0 * z[1]
+      b1i <- sigma_b1 * (rho * z[1] + sqrt(1 - rho^2) * z[2])
+      x1i <- rnorm(1, 0, 1)
+
+      for (j in 0:(n_timepoints - 1)) {
+        epsilon_ij <- rnorm(1, 0, sigma_e)
+        y_ij <- beta0 + beta1 * j + beta_x1 * x1i + b0i + b1i * j + epsilon_ij
+        sim_rcr <- rbind(sim_rcr, data.frame(id = as.integer(i), time = as.numeric(j), x1 = x1i, y = y_ij))
+      }
+    }
+  }
+}
+```
+
+## Introduction
+
+Random coefficient regression models (also known as random intercept and random slope models) are a powerful tool for analyzing repeated measures or longitudinal data. The `rcreg` package provides a simplified interface to fit these models using the `lme4` package as a backend.
+
+## Basic Example
+
+### Load and Explore Data
+
+```{r}
+# Load the example dataset
+data(sim_rcr)
+
+# View the structure
+str(sim_rcr)
+
+# First few observations
+head(sim_rcr, 12)
+
+# Summary statistics
+summary(sim_rcr)
+```
+
+The `sim_rcr` dataset contains:
+- `id`: Subject identifier (100 subjects)
+- `time`: Measurement time points (0-4)
+- `x1`: A time-invariant covariate
+- `y`: The response variable
+
+### Visualize Individual Trajectories
+
+```{r, fig.width=7, fig.height=5}
+# Plot trajectories for first 10 subjects
+subset_data <- subset(sim_rcr, id <= 10)
+
+# Base R plotting
+par(mfrow = c(1, 1))
+plot(y ~ time, data = subset_data, type = "n",
+     main = "Individual Trajectories (First 10 Subjects)",
+     xlab = "Time", ylab = "Response (y)")
+
+# Add lines for each subject
+for (i in 1:10) {
+  subj_data <- subset(subset_data, id == i)
+  lines(y ~ time, data = subj_data, col = i, lwd = 2)
+  points(y ~ time, data = subj_data, col = i, pch = 19)
+}
+legend("topleft", legend = paste("ID", 1:10), col = 1:10, lwd = 2, ncol = 2)
+```
+
+## Fitting Models
+
+### Random Intercept Model
+
+```{r}
+# Fit a random intercept model
+mod_int <- rcr_fit(
+  formula = y ~ time + x1,
+  data = sim_rcr,
+  id = "id",
+  time = "time",
+  random = "intercept"
+)
+
+# View the model object
+print(mod_int)
+
+# Detailed summary
+summ_int <- rcr_summary(mod_int)
+print(summ_int)
+```
+
+### Random Intercept and Slope Model
+
+```{r}
+# Fit a random intercept and slope model
+mod_both <- rcr_fit(
+  formula = y ~ time + x1,
+  data = sim_rcr,
+  id = "id",
+  time = "time",
+  random = "intercept_slope"
+)
+
+# Summary
+summ_both <- rcr_summary(mod_both)
+print(summ_both)
+```
+
+### Model Comparison
+
+```{r}
+# Compare AIC and BIC
+cat("Random Intercept Model:\n")
+cat("  AIC:", summ_int$aic, "\n")
+cat("  BIC:", summ_int$bic, "\n\n")
+
+cat("Random Intercept + Slope Model:\n")
+cat("  AIC:", summ_both$aic, "\n")
+cat("  BIC:", summ_both$bic, "\n")
+
+# Lower AIC/BIC indicates better fit
+if (summ_both$aic < summ_int$aic) {
+  cat("\nThe random intercept + slope model has better fit (lower AIC).\n")
+}
+```
+
+## Interpreting Results
+
+### Fixed Effects
+
+```{r}
+# Extract fixed effects
+summ_both$fixed_effects
+```
+
+The fixed effects tell us about the average effects in the population:
+- **Intercept**: Average response at time = 0 when x1 = 0
+- **time**: Average rate of change over time
+- **x1**: Effect of the covariate x1 on the response
+
+### Random Effects
+
+```{r}
+# Variance components
+summ_both$random_effects
+
+# ICC
+summ_both$icc
+```
+
+The random effects variance components tell us about between-subject variability:
+- **Intercept variance**: How much subjects vary in their baseline levels
+- **Slope variance**: How much subjects vary in their rates of change
+- **Covariance**: Whether subjects with higher baselines tend to have steeper/flatter slopes
+- **ICC**: Proportion of variance due to between-subject differences
+
+### Extract Individual Random Effects
+
+```{r}
+# Get subject-specific random effects (BLUPs)
+random_effs <- rcr_ranef(mod_both)
+head(random_effs[[1]])
+```
+
+## Predictions
+
+### Subject-Specific Predictions
+
+```{r}
+# Predictions including random effects
+pred_subj <- rcr_predict(mod_both, type = "subject")
+head(pred_subj)
+```
+
+### Population-Averaged Predictions
+
+```{r}
+# Predictions using only fixed effects
+pred_pop <- rcr_predict(mod_both, type = "population")
+head(pred_pop)
+```
+
+### Predictions for New Data
+
+```{r}
+# Create new data
+newdata <- data.frame(
+  id = rep(1:3, each = 6),
+  time = rep(0:5, times = 3),
+  x1 = rep(c(-1, 0, 1), each = 6)
+)
+
+# Make predictions
+pred_new <- rcr_predict(mod_both, newdata = newdata, type = "population", se.fit = TRUE)
+
+# View predictions with standard errors
+data.frame(
+  newdata,
+  predicted = pred_new$fit,
+  se = pred_new$se.fit,
+  lower = pred_new$fit - 1.96 * pred_new$se.fit,
+  upper = pred_new$fit + 1.96 * pred_new$se.fit
+)[1:12, ]
+```
+
+## Diagnostics
+
+```{r, fig.width=7, fig.height=5}
+# Run diagnostic plots
+rcr_diagnostics(mod_both, which = c(1, 2))
+```
+
+The diagnostic plots help assess model assumptions:
+- **Residuals vs Fitted**: Check for linearity and homoscedasticity (constant variance)
+- **QQ-plot**: Check normality of residuals
+
+## Additional Features
+
+### Centering Time Variable
+
+```{r}
+# Global centering
+sim_rcr_c <- rcr_center_time(sim_rcr, time = "time")
+head(sim_rcr_c)
+
+# Refit model with centered time
+mod_centered <- rcr_fit(y ~ time_centered + x1, data = sim_rcr_c,
+                        id = "id", time = "time_centered",
+                        random = "intercept_slope")
+
+summ_centered <- rcr_summary(mod_centered)
+
+# Now the intercept is interpretable as the expected value at the mean time point
+summ_centered$fixed_effects
+```
+
+## Summary
+
+The `rcreg` package provides:
+
+1. **Simple syntax** for specifying random effects models
+2. **Clean summaries** of model results
+3. **Easy predictions** at subject or population level
+4. **Built-in diagnostics** for model checking
+5. **Utility functions** for common preprocessing tasks
+
+For more details on specific functions, see their help pages:
+- `?rcr_fit`
+- `?rcr_summary`
+- `?rcr_predict`
+- `?rcr_diagnostics`
+- `?rcr_icc`
