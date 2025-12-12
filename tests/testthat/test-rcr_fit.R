@@ -146,6 +146,29 @@ test_that("rcr_fit validates random argument", {
   )
 })
 
+test_that("rcr_fit validates missingness and numeric time", {
+  base_data <- data.frame(
+    id = c(1, 1, 2, NA_integer_),
+    time = c(0, 1, 0, 1),
+    x1 = rnorm(4),
+    y = rnorm(4)
+  )
+
+  expect_error(
+    rcr_fit(y ~ time + x1, data = base_data, id = "id", time = "time"),
+    "contains missing values"
+  )
+
+  non_numeric_time <- base_data
+  non_numeric_time$id[4] <- 2
+  non_numeric_time$time <- c("t0", "t1", "t0", "t1")
+
+  expect_error(
+    rcr_fit(y ~ time + x1, data = non_numeric_time, id = "id", time = "time"),
+    "must be numeric"
+  )
+})
+
 
 test_that("print method works for rcr_mod", {
   set.seed(999)

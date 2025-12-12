@@ -17,7 +17,12 @@ knitr::opts_chunk$set(
 ```
 
 ```{r setup}
-library(rcreg)
+# Load package from source to get latest changes
+if (requireNamespace("devtools", quietly = TRUE)) {
+  devtools::load_all(quiet = TRUE)
+} else {
+  library(rcreg)
+}
 
 # Ensure example dataset is available when building the vignette
 if (!exists("sim_rcr")) {
@@ -145,19 +150,12 @@ print(summ_both)
 ### Model Comparison
 
 ```{r}
-# Compare AIC and BIC
-cat("Random Intercept Model:\n")
-cat("  AIC:", summ_int$aic, "\n")
-cat("  BIC:", summ_int$bic, "\n\n")
-
-cat("Random Intercept + Slope Model:\n")
-cat("  AIC:", summ_both$aic, "\n")
-cat("  BIC:", summ_both$bic, "\n")
-
-# Lower AIC/BIC indicates better fit
-if (summ_both$aic < summ_int$aic) {
-  cat("\nThe random intercept + slope model has better fit (lower AIC).\n")
-}
+# Use helper to compare models side-by-side
+cmp <- rcr_compare(
+  random_intercept = mod_int,
+  random_intercept_slope = mod_both
+)
+cmp
 ```
 
 ## Interpreting Results
@@ -239,6 +237,30 @@ data.frame(
 )[1:12, ]
 ```
 
+### Prediction and Confidence Intervals
+
+```{r}
+# Confidence intervals (fixed-effects uncertainty only)
+ci_pred <- rcr_predict(
+  mod_both,
+  newdata = newdata,
+  type = "population",
+  interval = "confidence",
+  level = 0.9,
+  se.fit = TRUE
+)
+head(ci_pred)
+
+# Prediction intervals (includes residual variance)
+pi_pred <- rcr_predict(
+  mod_both,
+  newdata = newdata,
+  type = "population",
+  interval = "prediction"
+)
+head(pi_pred)
+```
+
 ## Diagnostics
 
 ```{r, fig.width=7, fig.height=5}
@@ -249,6 +271,18 @@ rcr_diagnostics(mod_both, which = c(1, 2))
 The diagnostic plots help assess model assumptions:
 - **Residuals vs Fitted**: Check for linearity and homoscedasticity (constant variance)
 - **QQ-plot**: Check normality of residuals
+
+## Visualizing Observed vs Predicted Trajectories
+
+The plotting helper uses `ggplot2` (loaded only if available) to overlay observed
+points and model-predicted trajectories.
+
+```{r, fig.width=7, fig.height=5}
+if (requireNamespace("ggplot2", quietly = TRUE)) {
+  p <- rcr_plot_predictions(mod_both, type = "subject")
+  p
+}
+```
 
 ## Additional Features
 
@@ -278,7 +312,9 @@ The `rcreg` package provides:
 2. **Clean summaries** of model results
 3. **Easy predictions** at subject or population level
 4. **Built-in diagnostics** for model checking
-5. **Utility functions** for common preprocessing tasks
+5. **Model comparison** with `rcr_compare()`
+6. **Visualization helpers** with `rcr_plot_predictions()`
+7. **Utility functions** for common preprocessing tasks
 
 For more details on specific functions, see their help pages:
 - `?rcr_fit`
@@ -286,3 +322,5 @@ For more details on specific functions, see their help pages:
 - `?rcr_predict`
 - `?rcr_diagnostics`
 - `?rcr_icc`
+- `?rcr_compare`
+- `?rcr_plot_predictions`

@@ -1,0 +1,38 @@
+---
+title: "Getting Started with rcreg"
+output: rmarkdown::html_vignette
+vignette: >
+  %\VignetteIndexEntry{Getting Started with rcreg}
+  %\VignetteEngine{knitr::rmarkdown}
+  %\VignetteEncoding{UTF-8}
+---
+
+```{r, include = FALSE}
+knitr::opts_chunk$set(
+  collapse = TRUE,
+  comment = "#>"
+)
+```
+
+```{r setup}
+library(rcreg)
+```
+
+## Introduction
+
+The `rcreg` package simplifies the analysis of repeated measures data using random coefficient regression models.
+
+## Basic Usage
+
+```{r}
+data(sim_rcr)
+mod <- rcr_fit(y ~ time + x1, data = sim_rcr, id = "id", time = "time",
+               random = "intercept_slope")
+rcr_summary(mod)
+```
+
+## Diagnostics
+
+```{r, fig.width=6, fig.height=6}
+rcr_diagnostics(mod)
+```

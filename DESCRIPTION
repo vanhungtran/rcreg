@@ -20,11 +20,10 @@ Depends:
 Imports:
     lme4 (>= 1.1-0),
     stats,
-    methods
+    methods,
+    graphics
 Suggests:
     ggplot2,
-    nlme,
-    broom.mixed,
     testthat (>= 3.0.0),
     knitr,
     rmarkdown

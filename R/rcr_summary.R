@@ -41,7 +41,10 @@ rcr_summary <- function(object, ...) {
 
   # Extract fixed effects
   fe <- lme4::fixef(fit)
-  fe_se <- sqrt(diag(vcov(fit)))
+  # Robustly extract standard errors without diag() to avoid "long vectors"
+  # errors seen with some vcov classes.
+  V <- as.matrix(vcov(fit))
+  fe_se <- sqrt(pmax(0, V[cbind(seq_len(nrow(V)), seq_len(ncol(V)))]))
   fe_t <- fe / fe_se
 
   # Confidence intervals (95%)

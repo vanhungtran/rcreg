@@ -84,10 +84,21 @@ rcr_fit <- function(formula, data, id, time, random = c("intercept", "slope", "i
   if (!time %in% names(data)) {
     stop("Time variable '", time, "' not found in data.")
   }
+  if (any(is.na(data[[id]]))) {
+    stop("ID variable '", id, "' contains missing values; please remove or impute before fitting.")
+  }
+  if (any(is.na(data[[time]]))) {
+    stop("Time variable '", time, "' contains missing values; please remove or impute before fitting.")
+  }
 
   # Validate that data is a data frame
   if (!is.data.frame(data)) {
     stop("'data' must be a data frame.")
+  }
+
+  # Validate time variable type
+  if (!is.numeric(data[[time]])) {
+    stop("Time variable '", time, "' must be numeric.")
   }
 
   # Construct random effects formula based on random type
