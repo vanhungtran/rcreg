@@ -723,17 +723,20 @@ analyze_pain_trial <- function(pain_data,
   cat("\n=== TREATMENT EFFECT ESTIMATION ===\n")
   
   # Marginal means at key time points
-  emm_time <- emmeans::emmeans(model_primary, 
-                      specs = as.formula(paste("pairwise ~", treatment_var)),
+  emm_time <- emmeans::emmeans(model_primary,
+                      specs = as.formula(paste("~", treatment_var, "*", time_var)),
                       at = setNames(list(c(0, 1, 2, 3)), time_var))
-  
+
   cat("Estimated Marginal Means at Different Time Points:\n")
-  print(emm_time$emmeans)
-  
+  print(emm_time)
+
+  # Pairwise comparisons between treatments
+  emm_contrasts <- pairs(emm_time, by = time_var)
+
   cat("\nPairwise Comparisons:\n")
-  print(emm_time$contrasts)
-  
-  results$treatment_effects <- emm_time
+  print(emm_contrasts)
+
+  results$treatment_effects <- list(emmeans = emm_time, contrasts = emm_contrasts)
   
   # 5. Individual response prediction
   cat("\n=== INDIVIDUAL RESPONSE PREDICTION ===\n")
@@ -823,7 +826,7 @@ analyze_pain_trial <- function(pain_data,
     n_observations = sum(!is.na(pain_data[[primary_endpoint]])),
     proportion_missing = mean(is.na(pain_data[[primary_endpoint]])),
     primary_model_formula = formula1,
-    treatment_effects_summary = summary(emm_time$contrasts),
+    treatment_effects_summary = summary(emm_contrasts),
     model_performance = performance(model_primary)
   )
   
@@ -837,28 +840,28 @@ trial_results <- analyze_pain_trial(pain_study)
 generate_clinical_report <- function(results) {
   cat(strrep("=", 60), "\n")
   cat("CLINICAL TRIAL ANALYSIS REPORT\n")
-  cat("=" * 60, "\n\n")
-  
+  cat(strrep("=", 60), "\n\n")
+
   cat("STUDY CHARACTERISTICS:\n")
-  cat("-" * 40, "\n")
+  cat(strrep("-", 40), "\n")
   cat("Number of patients:", results$report$n_patients, "\n")
   cat("Number of observations:", results$report$n_observations, "\n")
   cat("Proportion missing:", round(results$report$proportion_missing * 100, 1), "%\n\n")
   
   cat("PRIMARY ANALYSIS RESULTS:\n")
-  cat("-" * 40, "\n")
+  cat(strrep("-", 40), "\n")
   print(summary(results$primary_model))
   
   cat("\nTREATMENT EFFECTS:\n")
-  cat("-" * 40, "\n")
+  cat(strrep("-", 40), "\n")
   print(results$treatment_effects$contrasts)
   
   cat("\nMODEL PERFORMANCE:\n")
-  cat("-" * 40, "\n")
+  cat(strrep("-", 40), "\n")
   print(results$report$model_performance)
   
   cat("\nSENSITIVITY ANALYSES:\n")
-  cat("-" * 40, "\n")
+  cat(strrep("-", 40), "\n")
   cat("Complete case analysis (n =", results$sensitivity$n_complete, "):\n")
   print(fixef(results$sensitivity$complete_case))
   cat("\nLOCF imputation (n =", results$sensitivity$n_locf, "):\n")
@@ -892,9 +895,9 @@ create_clinical_visualizations <- function(pain_data, analysis_results) {
     theme(legend.position = "none")
   
   # 2. Treatment effect over time
-  emm_data <- as.data.frame(analysis_results$treatment_effects$emmeans)
-  
-  plots$treatment_effects <- ggplot(emm_data, aes(x = time, y = emmean, 
+  emm_data <- as.data.frame(summary(analysis_results$treatment_effects$emmeans))
+
+  plots$treatment_effects <- ggplot(emm_data, aes(x = time, y = emmean,
                                                   color = treatment, group = treatment)) +
     geom_line(size = 1.5) +
     geom_ribbon(aes(ymin = lower.CL, ymax = upper.CL, fill = treatment), 
@@ -940,9 +943,9 @@ create_clinical_visualizations <- function(pain_data, analysis_results) {
   
   # 5. Individual predictions for example patients
   example_patients <- sample(unique(pain_data$patient), 9)
-  example_data <- pain_data %>% 
-    filter(patient %in% example_patients) %>%
-    mutate(predicted = predict(analysis_results$primary_model))
+  example_data <- pain_data %>%
+    filter(patient %in% example_patients, !is.na(pain_score)) %>%
+    mutate(predicted = predict(analysis_results$primary_model, newdata = ., re.form = NULL))
   
   plots$individual_predictions <- ggplot(example_data, aes(x = time)) +
     geom_point(aes(y = pain_score, color = "Observed"), size = 2) +
@@ -1117,8 +1120,8 @@ analyze_growth_data <- function() {
   growth_data <- growth_data %>%
     group_by(child_id) %>%
     mutate(
-      doubled_birth = any(height >= 2 * first(height[age == 0], na.rm = TRUE), na.rm = TRUE),
-      puberty_growth_spurt = any(velocity > 8, na.rm = TRUE, na.rm = TRUE),
+      doubled_birth = any(height >= 2 * first(height[age == 0]), na.rm = TRUE),
+      puberty_growth_spurt = any(velocity > 8, na.rm = TRUE),
       adult_height_reached = any(age >= 16 & velocity < 0.5, na.rm = TRUE)
     ) %>%
     ungroup()
@@ -1181,7 +1184,9 @@ fit_growth_models <- function(growth_data) {
   results <- list()
   
   # Filter to complete cases for modeling
-  model_data <- growth_data %>% filter(!is.na(height), !is.na(sex))
+  model_data <- growth_data %>%
+    filter(!is.na(height), !is.na(sex)) %>%
+    mutate(sex = factor(sex))
   
   # 1. Linear mixed model with random intercept and slope
   cat("=== MODEL 1: LINEAR GROWTH MODEL ===\n")
@@ -1786,19 +1791,33 @@ analyze_biomarkers <- function(biomarker_study,
   # Perform PCA on trajectory features
   pca_data <- trajectory_features %>%
     select(where(is.numeric)) %>%
-    scale()
-  
-  pca_result <- prcomp(pca_data, center = TRUE, scale = TRUE)
-  
-  cat("PCA Summary (first 5 components):\n")
-  print(summary(pca_result)$importance[, 1:5])
-  
-  results$pca <- list(
-    pca_result = pca_result,
-    variance_explained = summary(pca_result)$importance[2, ],
-    loadings = pca_result$rotation,
-    scores = pca_result$x
-  )
+    na.omit()  # Remove rows with missing values
+
+  # Remove constant/zero variance columns
+  col_vars <- apply(pca_data, 2, function(x) {
+    v <- var(x, na.rm = TRUE)
+    !is.na(v) && v > 0
+  })
+  pca_data <- pca_data[, col_vars]
+
+  # Check if we have sufficient data for PCA
+  if (nrow(pca_data) > 0 && ncol(pca_data) > 1) {
+    pca_result <- prcomp(pca_data, center = TRUE, scale. = TRUE)
+
+    cat("PCA Summary (first 5 components):\n")
+    n_comps <- min(5, ncol(pca_data))
+    print(summary(pca_result)$importance[, 1:n_comps])
+
+    results$pca <- list(
+      pca_result = pca_result,
+      variance_explained = summary(pca_result)$importance[2, ],
+      loadings = pca_result$rotation,
+      scores = pca_result$x
+    )
+  } else {
+    cat("Insufficient data for PCA (rows:", nrow(pca_data), "cols:", ncol(pca_data), ")\n")
+    results$pca <- NULL
+  }
   
   # 3. Mixed model for all biomarkers (simplified)
   cat("\n=== MIXED MODEL FOR ALL BIOMARKERS ===\n")
@@ -1829,7 +1848,7 @@ analyze_biomarkers <- function(biomarker_study,
     group_by(biomarker, time) %>%
     summarise(mean_value = mean(value, na.rm = TRUE), .groups = "drop") %>%
     pivot_wider(names_from = time, values_from = mean_value) %>%
-    column_to_rownames("biomarker") %>%
+    tibble::column_to_rownames("biomarker") %>%
     as.matrix()
   
   # Hierarchical clustering
@@ -1998,13 +2017,13 @@ biomarker_analysis <- analyze_biomarkers(
 
 # Generate biomarker analysis report
 generate_biomarker_report <- function(analysis_results) {
-  cat("=" * 70, "\n")
+  cat(strrep("=", 70), "\n")
   cat("BIOMARKER DISCOVERY ANALYSIS REPORT\n")
-  cat("=" * 70, "\n\n")
+  cat(strrep("=", 70), "\n\n")
   
   # Summary statistics
   cat("ANALYSIS OVERVIEW:\n")
-  cat("-" * 40, "\n")
+  cat(strrep("-", 40), "\n")
   cat("Number of biomarkers analyzed:", length(analysis_results$selected_biomarkers), "\n")
   cat("Number of univariate models:", length(analysis_results$univariate), "\n")
   
@@ -2014,7 +2033,7 @@ generate_biomarker_report <- function(analysis_results) {
     arrange(fdr)
   
   cat("\nSIGNIFICANT BIOMARKERS (FDR < 0.05):\n")
-  cat("-" * 40, "\n")
+  cat(strrep("-", 40), "\n")
   if (nrow(sig_biomarkers) > 0) {
     print(sig_biomarkers)
   } else {
@@ -2023,19 +2042,19 @@ generate_biomarker_report <- function(analysis_results) {
   
   # Prediction performance
   cat("\nTREATMENT RESPONSE PREDICTION:\n")
-  cat("-" * 40, "\n")
+  cat(strrep("-", 40), "\n")
   print(analysis_results$prediction$metrics)
   
   # Clustering results
   cat("\nBIOMARKER CLUSTERING:\n")
-  cat("-" * 40, "\n")
+  cat(strrep("-", 40), "\n")
   cluster_summary <- table(analysis_results$clustering$clusters)
   cat("Cluster sizes:\n")
   print(cluster_summary)
   
   # PCA results
   cat("\nPRINCIPAL COMPONENT ANALYSIS:\n")
-  cat("-" * 40, "\n")
+  cat(strrep("-", 40), "\n")
   var_explained <- analysis_results$pca$variance_explained[1:5]
   cat("Variance explained by first 5 PCs:\n")
   print(round(var_explained * 100, 1))
@@ -2044,7 +2063,7 @@ generate_biomarker_report <- function(analysis_results) {
   
   # Network analysis
   cat("\nBIOMARKER NETWORK:\n")
-  cat("-" * 40, "\n")
+  cat(strrep("-", 40), "\n")
   network_stats <- data.frame(
     n_biomarkers = nrow(analysis_results$network$adjacency_matrix),
     n_edges = sum(analysis_results$network$adjacency_matrix != 0) / 2,
@@ -2113,35 +2132,42 @@ create_biomarker_visualizations <- function(biomarker_study, analysis_results) {
           legend.position = "right")
   
   # 3. PCA biplot
-  pca_scores <- as.data.frame(analysis_results$pca$scores[, 1:2])
-  pca_loadings <- as.data.frame(analysis_results$pca$loadings[, 1:2])
-  
-  # Sample for clarity
-  set.seed(123)
-  sample_idx <- sample(1:nrow(pca_scores), min(100, nrow(pca_scores)))
-  
-  plots$pca <- ggplot() +
-    geom_point(data = pca_scores[sample_idx, ], 
-               aes(x = PC1, y = PC2), alpha = 0.5, size = 1) +
-    geom_segment(data = pca_loadings[1:10, ],  # Top 10 loadings
-                 aes(x = 0, y = 0, xend = PC1*5, yend = PC2*5),
-                 arrow = arrow(length = unit(0.2, "cm")), color = "red") +
-    geom_text(data = pca_loadings[1:10, ],
-              aes(x = PC1*5.2, y = PC2*5.2, label = rownames(pca_loadings)[1:10]),
-              size = 3, color = "red") +
-    labs(title = "PCA Biplot of Biomarker Trajectory Features",
-         subtitle = "Red arrows show biomarker contributions",
-         x = paste0("PC1 (", round(analysis_results$pca$variance_explained[1]*100, 1), "%)"),
-         y = paste0("PC2 (", round(analysis_results$pca$variance_explained[2]*100, 1), "%)")) +
-    theme_minimal()
+  if (!is.null(analysis_results$pca)) {
+    pca_scores <- as.data.frame(analysis_results$pca$scores[, 1:2])
+    pca_loadings <- as.data.frame(analysis_results$pca$loadings[, 1:2])
+
+    # Sample for clarity
+    set.seed(123)
+    sample_idx <- sample(1:nrow(pca_scores), min(100, nrow(pca_scores)))
+
+    plots$pca <- ggplot() +
+      geom_point(data = pca_scores[sample_idx, ],
+                 aes(x = PC1, y = PC2), alpha = 0.5, size = 1) +
+      geom_segment(data = pca_loadings[1:min(10, nrow(pca_loadings)), ],  # Top 10 loadings
+                   aes(x = 0, y = 0, xend = PC1*5, yend = PC2*5),
+                   arrow = arrow(length = unit(0.2, "cm")), color = "red") +
+      geom_text(data = pca_loadings[1:min(10, nrow(pca_loadings)), ],
+                aes(x = PC1*5.2, y = PC2*5.2, label = rownames(pca_loadings)[1:min(10, nrow(pca_loadings))]),
+                size = 3, color = "red") +
+      labs(title = "PCA Biplot of Biomarker Trajectory Features",
+           subtitle = "Red arrows show biomarker contributions",
+           x = paste0("PC1 (", round(analysis_results$pca$variance_explained[1]*100, 1), "%)"),
+           y = paste0("PC2 (", round(analysis_results$pca$variance_explained[2]*100, 1), "%)")) +
+      theme_minimal()
+  } else {
+    # Create a placeholder plot if PCA is not available
+    plots$pca <- ggplot() +
+      annotate("text", x = 0.5, y = 0.5, label = "PCA not available\n(insufficient data)", size = 6) +
+      theme_void()
+  }
   
   # 4. Biomarker clustering dendrogram
   hc <- analysis_results$clustering$hclust
-  dendro_data <- as.dendrogram(hc)
-  dendro_segments <- as.ggdend(dendro_data)$segments
-  
+  library(ggdendro)
+  dendro_obj <- dendro_data(hc)
+
   plots$dendrogram <- ggplot() +
-    geom_segment(data = dendro_segments, 
+    geom_segment(data = segment(dendro_obj), 
                  aes(x = x, y = y, xend = xend, yend = yend)) +
     labs(title = "Biomarker Clustering Dendrogram",
          subtitle = "Hierarchical clustering of biomarker trajectories",
@@ -2286,7 +2312,7 @@ ml_random_coefficients <- function(data, outcome_var = "outcome_observed") {
       rolling_mean = zoo::rollmean(.data[[outcome_var]], 3, fill = NA, align = "right")
     ) %>%
     ungroup() %>%
-    filter(!is.na(lag1), !is.na(lag2))
+    filter(!is.na(.data[[outcome_var]]), !is.na(lag1), !is.na(lag2), !is.na(rolling_mean))
   
   # Train-test split
   set.seed(123)
@@ -2629,18 +2655,18 @@ print(power_analysis$sample_size_table)
 create_reproducibility_report <- function(analysis_objects, 
                                           analysis_name = "Random Coefficient Analysis") {
   
-  cat("=" * 70, "\n")
+  cat(strrep("=", 70), "\n")
   cat("REPRODUCIBILITY REPORT:", analysis_name, "\n")
-  cat("=" * 70, "\n\n")
+  cat(strrep("=", 70), "\n\n")
   
   # 1. Session information
   cat("1. SESSION INFORMATION:\n")
-  cat("-" * 40, "\n")
+  cat(strrep("-", 40), "\n")
   print(sessionInfo())
   
   # 2. Data summary
   cat("\n2. DATA SUMMARY:\n")
-  cat("-" * 40, "\n")
+  cat(strrep("-", 40), "\n")
   
   if ("data" %in% names(analysis_objects)) {
     data_summary <- list(
@@ -2654,7 +2680,7 @@ create_reproducibility_report <- function(analysis_objects,
   
   # 3. Model specifications
   cat("\n3. MODEL SPECIFICATIONS:\n")
-  cat("-" * 40, "\n")
+  cat(strrep("-", 40), "\n")
   
   if ("models" %in% names(analysis_objects)) {
     for (model_name in names(analysis_objects$models)) {
@@ -2671,7 +2697,7 @@ create_reproducibility_report <- function(analysis_objects,
   
   # 4. Key results
   cat("\n4. KEY RESULTS:\n")
-  cat("-" * 40, "\n")
+  cat(strrep("-", 40), "\n")
   
   # Extract and summarize key findings
   key_results <- list(
@@ -2687,7 +2713,7 @@ create_reproducibility_report <- function(analysis_objects,
   
   # 5. File structure
   cat("\n5. PROJECT FILE STRUCTURE:\n")
-  cat("-" * 40, "\n")
+  cat(strrep("-", 40), "\n")
   
   project_files <- list.files(".", pattern = "\\.R$|\\.Rmd$|\\.rds$")
   cat("Project files:\n")
@@ -2789,9 +2815,9 @@ create_reproducibility_report <- function(analysis_objects,
   writeLines(dockerfile_content, "Dockerfile")
   cat("Created Dockerfile for containerization\n")
   
-  cat("\n", "=" * 70, "\n")
+  cat("\n", strrep("=", 70), "\n")
   cat("REPRODUCIBILITY PACKAGE CREATION COMPLETE\n")
-  cat("=" * 70, "\n")
+  cat(strrep("=", 70), "\n")
   
   return(list(
     save_file = save_file,
@@ -2828,12 +2854,12 @@ reproducibility_package <- create_reproducibility_report(
 # Final summary and best practices
 generate_final_report <- function() {
   
-  cat("=" * 70, "\n")
+  cat(strrep("=", 70), "\n")
   cat("RANDOM COEFFICIENT REGRESSION MODELS: BEST PRACTICES\n")
-  cat("=" * 70, "\n\n")
+  cat(strrep("=", 70), "\n\n")
   
   cat("SUMMARY OF KEY POINTS:\n")
-  cat("-" * 40, "\n")
+  cat(strrep("-", 40), "\n")
   
   best_practices <- list(
     "Model Specification" = c(
@@ -2892,7 +2918,7 @@ generate_final_report <- function() {
     }
   }
   
-  cat("\n", "-" * 40, "\n")
+  cat("\n", strrep("-", 40), "\n")
   cat("SOFTWARE RECOMMENDATIONS:\n\n")
   
   software_recommendations <- data.frame(
@@ -2911,7 +2937,7 @@ generate_final_report <- function() {
   
   print(software_recommendations)
   
-  cat("\n", "-" * 40, "\n")
+  cat("\n", strrep("-", 40), "\n")
   cat("COMMON PITFALLS TO AVOID:\n\n")
   
   pitfalls <- c(
@@ -2929,9 +2955,9 @@ generate_final_report <- function() {
     cat(pitfall, "\n")
   }
   
-  cat("\n", "=" * 70, "\n")
+  cat("\n", strrep("=", 70), "\n")
   cat("CONCLUSION\n")
-  cat("=" * 70, "\n\n")
+  cat(strrep("=", 70), "\n\n")
   
   conclusion_text <- paste(
     "Random coefficient regression models provide a powerful and flexible framework",
@@ -2956,7 +2982,7 @@ generate_final_report <- function() {
   cat(conclusion_text)
   
   # Create final checklist
-  cat("\n", "-" * 40, "\n")
+  cat("\n", strrep("-", 40), "\n")
   cat("FINAL CHECKLIST FOR ANALYSIS:\n\n")
   
   checklist <- data.frame(
@@ -2976,9 +3002,9 @@ generate_final_report <- function() {
   
   print(checklist)
   
-  cat("\n", "=" * 70, "\n")
+  cat("\n", strrep("=", 70), "\n")
   cat("ANALYSIS COMPLETE\n")
-  cat("=" * 70, "\n")
+  cat(strrep("=", 70), "\n")
 }
 
 # Generate final report
