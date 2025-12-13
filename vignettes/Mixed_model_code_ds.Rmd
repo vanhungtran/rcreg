@@ -799,8 +799,7 @@ analyze_pain_trial <- function(pain_data,
   # b) LOCF imputation
   pain_data_locf <- pain_data %>%
     group_by(.data[[patient_var]]) %>%
-    mutate(pain_score_locf = na.locf(.data[[primary_endpoint]], 
-                                     na.rm = FALSE)) %>%
+    mutate(pain_score_locf = zoo::na.locf(.data[[primary_endpoint]], na.rm = FALSE)) %>%
     ungroup()
   
   model_locf <- update(model_primary, 
