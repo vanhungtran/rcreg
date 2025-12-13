@@ -1,6 +1,12 @@
 ---
 title: "Quick Start Guide to rcreg"
-output: rmarkdown::html_vignette
+author: "rcreg Package"
+date: "`r Sys.Date()`"
+output: 
+  rmarkdown::html_vignette:
+    toc: true
+    toc_depth: 3
+    css: vignette.css
 vignette: >
   %\VignetteIndexEntry{Quick Start Guide to rcreg}
   %\VignetteEngine{knitr::rmarkdown}
