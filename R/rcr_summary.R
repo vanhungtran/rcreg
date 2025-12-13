@@ -14,6 +14,7 @@
 #' \item{random_effects}{Data frame of random effects variance/covariance components}
 #' \item{residual_variance}{Residual variance estimate}
 #' \item{icc}{Intraclass correlation coefficient(s)}
+#' \item{r_squared}{Marginal and Conditional R-squared values}
 #' \item{aic}{Akaike Information Criterion}
 #' \item{bic}{Bayesian Information Criterion}
 #' \item{logLik}{Log-likelihood}
@@ -31,7 +32,7 @@
 #'                random = "intercept_slope")
 #' rcr_summary(mod)
 #'
-#' @seealso \code{\link{rcr_fit}}, \code{\link{rcr_icc}}
+#' @seealso \code{\link{rcr_fit}}, \code{\link{rcr_icc}}, \code{\link{rcr_r2}}
 rcr_summary <- function(object, ...) {
   if (!inherits(object, "rcr_mod")) {
     stop("Object must be of class 'rcr_mod'")
@@ -83,6 +84,9 @@ rcr_summary <- function(object, ...) {
   # Calculate ICC
   icc_val <- rcr_icc(object)
 
+  # Calculate R-squared
+  r2_val <- rcr_r2(object)
+
   # Model fit statistics
   aic <- AIC(fit)
   bic <- BIC(fit)
@@ -97,6 +101,7 @@ rcr_summary <- function(object, ...) {
       random_effects = vc_df,
       residual_variance = resid_var,
       icc = icc_val,
+      r_squared = r2_val,
       aic = aic,
       bic = bic,
       logLik = as.numeric(ll),
@@ -156,6 +161,10 @@ print.rcr_summary <- function(x, digits = 3, ...) {
   } else {
     cat("  ICC:", round(x$icc, digits), "\n")
   }
+  
+  cat("R-squared (Nakagawa & Schielzeth):\n")
+  cat("  Marginal (Fixed):    ", round(x$r_squared["Marginal"], digits), "\n")
+  cat("  Conditional (Total): ", round(x$r_squared["Conditional"], digits), "\n")
   cat("\n")
 
   cat("Model Fit Statistics:\n")

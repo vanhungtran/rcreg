@@ -39,6 +39,8 @@
 #'   \code{"intercept_slope"}.
 #' @param REML Logical. Should the model be fitted by REML (TRUE, default) or
 #'   maximum likelihood (FALSE)?
+#' @param control Optional list of control parameters passed to \code{lme4::lmerControl}.
+#'   Useful for handling convergence warnings.
 #' @param ... Additional arguments passed to \code{\link[lme4]{lmer}}.
 #'
 #' @return An object of class \code{"rcr_mod"}, which is a list containing:
@@ -72,7 +74,7 @@
 #'
 #' @seealso \code{\link{rcr_summary}}, \code{\link{rcr_predict}}, \code{\link{rcr_diagnostics}}
 rcr_fit <- function(formula, data, id, time, random = c("intercept", "slope", "intercept_slope"),
-                    REML = TRUE, ...) {
+                    REML = TRUE, control = NULL, ...) {
 
   # Match and validate arguments
   random <- match.arg(random)
@@ -115,8 +117,16 @@ rcr_fit <- function(formula, data, id, time, random = c("intercept", "slope", "i
   full_formula_str <- paste(fixed_part, "+", random_formula)
   full_formula <- as.formula(full_formula_str)
 
+  # Handle control argument
+  if (is.null(control)) {
+    # Use default lmerControl
+    control_arg <- lme4::lmerControl()
+  } else {
+    control_arg <- control
+  }
+
   # Fit the model using lme4::lmer
-  fit <- lme4::lmer(full_formula, data = data, REML = REML, ...)
+  fit <- lme4::lmer(full_formula, data = data, REML = REML, control = control_arg, ...)
 
   # Create rcr_mod object
   out <- structure(
