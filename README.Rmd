@@ -1,5 +1,16 @@
 ---
-output: github_document
+title: "rcreg: Random Coefficient Regression Models"
+author: "rcreg Package"
+date: "`r Sys.Date()`"
+output: 
+  github_document:
+    toc: true
+    toc_depth: 3
+  html_document:
+    toc: true
+    toc_depth: 3
+    css: vignette.css
+    theme: default
 ---
 
 <!-- README.md is generated from README.Rmd. Please edit that file -->

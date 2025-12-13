@@ -1,8 +1,20 @@
-# Random Coefficient Regression Models for Repeated Measurements: A Comprehensive Review
+---
+title: "Random Coefficient Regression Models for Repeated Measurements: A Comprehensive Review"
+author: "Literature Review"
+date: "`r Sys.Date()`"
+output: 
+  html_document:
+    toc: true
+    toc_depth: 3
+    css: vignette.css
+    number_sections: true
+---
+
+# Introduction
 
 Random coefficient regression models, also known as mixed-effects models with random slopes and intercepts, represent a powerful and flexible framework for analyzing repeated measurement data where measurements are nested within subjects. These models allow the relationship between a response variable and covariates to vary across individuals, capturing both population-level trends and subject-specific deviations. This review synthesizes the theoretical foundations, methodological approaches, estimation techniques, and practical applications of random coefficient regression models in the context of repeated measures studies.
 
-## Theoretical Foundations and Model Specification
+# Theoretical Foundations and Model Specification
 
 ### Basic Model Structure
 
