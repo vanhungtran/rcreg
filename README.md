@@ -21,7 +21,7 @@ specification of longitudinal mixed models by wrapping the powerful
 - Model diagnostics and visualizations
 - Data simulation for power analysis and teaching
 
-📖 **For a comprehensive review of random coefficient regression models, see:** [Random Coefficient Regression Models: A Comprehensive Review](review-random-coefficient-models.Rmd)
+📖 **For a comprehensive review of random coefficient regression models, see:** [Random Coefficient Regression Models: A Comprehensive Review](review-random-coefficient-models.md)
 
 ## Installation
 
