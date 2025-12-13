@@ -40,7 +40,7 @@ You can install the development version of `rcreg` from GitHub:
 
 ```r
 # install.packages("devtools")
-devtools::install_github("yourusername/rcreg")
+devtools::install_github("vanhungtran/rcreg")
 ```
 
 ## Quick Start
@@ -220,12 +220,12 @@ If you use `rcreg` in your research, please cite:
 
 ```
 Your Name (2024). rcreg: Random Coefficient Regression Models for Repeated Measurements.
-R package version 0.1.0. https://github.com/yourusername/rcreg
+R package version 0.1.0. https://github.com/vanhungtran/rcreg
 ```
 
 ## Getting Help
 
-- For bug reports and feature requests: [GitHub Issues](https://github.com/yourusername/rcreg/issues)
+- For bug reports and feature requests: [GitHub Issues](https://github.com/vanhungtran/rcreg/issues)
 - For questions about usage: Open a discussion on GitHub
 
 ## References
