@@ -835,7 +835,7 @@ trial_results <- analyze_pain_trial(pain_study)
 
 # Generate comprehensive summary report
 generate_clinical_report <- function(results) {
-  cat("=" * 60, "\n")
+  cat(strrep("=", 60), "\n")
   cat("CLINICAL TRIAL ANALYSIS REPORT\n")
   cat("=" * 60, "\n\n")
   
