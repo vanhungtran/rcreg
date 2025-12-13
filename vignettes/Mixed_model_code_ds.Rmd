@@ -1,0 +1,3039 @@
+---
+title: "## R code -  Applications and Case Studies of Random Coefficient Regression Models for Repeated Measurements"
+author: "Lucas VHH Tran"
+date: "`r Sys.Date()`"
+output:
+  html_document:
+    toc: true
+    toc_depth: 3
+    toc_float: true
+    code_folding: show
+    theme: cosmo
+pdf_document:
+    toc: true
+    toc_depth: 3
+word_document:
+    toc: true
+    toc_depth: 3
+bibliography: references.bib
+link-citations: yes
+vignette: >
+  %\VignetteIndexEntry{Random Coefficient Regression Models for Repeated Measurements: A Comprehensive Review}
+  %\VignetteEngine{knitr::rmarkdown}
+  %\VignetteEncoding{UTF-8}
+---
+
+
+
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(
+  echo = TRUE,
+  warning = FALSE,
+  message = FALSE,
+  fig.width = 10,
+  fig.height = 6,
+  fig.align = "center",
+  cache = TRUE,
+  out.width = "90%"
+)
+```
+
+```{r load_packages, echo=FALSE}
+# Load all required packages
+required_packages <- c(
+  "lme4", "nlme", "ggplot2", "lmerTest", "ggeffects", "performance",
+  "MASS", "mvtnorm", "robustlmm", "glmmTMB", "geepack", "brms",
+  "mgcv", "ranger", "dplyr", "tidyr", "purrr", "see", "patchwork",
+  "influence.ME", "DHARMa", "merTools", "sjPlot", "emmeans",
+  "multcomp", "Matrix", "optimx", "afex", "car", "boot"
+)
+
+# Install missing packages
+installed_packages <- installed.packages()[, "Package"]
+missing_packages <- setdiff(required_packages, installed_packages)
+
+if (length(missing_packages) > 0) {
+  install.packages(missing_packages, dependencies = TRUE)
+}
+
+# Load all packages
+suppressPackageStartupMessages({
+  library(lme4)
+  library(nlme)
+  library(ggplot2)
+  library(lmerTest)
+  library(ggeffects)
+  library(performance)
+  library(MASS)
+  library(mvtnorm)
+  library(robustlmm)
+  library(glmmTMB)
+  library(geepack)
+  library(brms)
+  library(mgcv)
+  library(ranger)
+  library(dplyr)
+  library(tidyr)
+  library(purrr)
+  library(see)
+  library(patchwork)
+  library(influence.ME)
+  library(DHARMa)
+  library(merTools)
+  library(sjPlot)
+  library(emmeans)
+  library(multcomp)
+  library(Matrix)
+  library(optimx)
+  library(afex)
+  library(car)
+  library(boot)
+})
+
+# Set global theme for plots
+theme_set(theme_minimal(base_size = 12) +
+            theme(plot.title = element_text(hjust = 0.5, face = "bold"),
+                  plot.subtitle = element_text(hjust = 0.5),
+                  legend.position = "bottom"))
+```
+
+## Abstract
+
+Random coefficient regression models, commonly formalized as linear, generalized, or nonlinear mixed-effects models, are a cornerstone for the analysis of repeated measurements and clustered data in biomedical research. This comprehensive review provides both theoretical foundations and practical implementation guidance through extensive R code examples. We cover model specification, estimation, inference, diagnostics, and advanced extensions across clinical trials, longitudinal growth studies, and biomarker discovery applications. The review emphasizes reproducible research with complete R workflows, from data simulation to model validation and reporting.
+
+**Keywords:** Mixed-effects models, Longitudinal data, Repeated measures, Random slopes, Hierarchical models, R programming, Clinical trials, Growth curves, Biomarker studies
+
+## 1. Introduction and Theoretical Foundations
+
+### 1.1 The Need for Random Coefficient Models
+
+Longitudinal and clustered data violate the independence assumption of traditional regression models due to within-subject correlation. Random coefficient models address this by allowing parameters to vary across subjects, capturing both population trends and individual heterogeneity.
+
+```{r theory_intro, echo=TRUE, fig.height=4}
+# Visual demonstration of the need for random coefficient models
+set.seed(123)
+
+# Create data with and without random coefficients
+n_subjects <- 30
+times <- seq(0, 10, length.out = 5)
+
+# Data without random coefficients (fixed effects only)
+data_fixed <- expand.grid(
+  subject = 1:n_subjects,
+  time = times
+)
+
+# Data with random coefficients
+data_random <- expand.grid(
+  subject = 1:n_subjects,
+  time = times
+)
+
+# Generate trajectories
+# Fixed effects only: parallel lines
+beta0 <- 50
+beta1 <- 2
+data_fixed$outcome <- beta0 + beta1 * data_fixed$time + rnorm(nrow(data_fixed), 0, 10)
+
+# Random coefficients: varying intercepts and slopes
+set.seed(123)
+random_intercepts <- rnorm(n_subjects, 0, 15)
+random_slopes <- rnorm(n_subjects, 0, 1)
+
+data_random$outcome <- numeric(nrow(data_random))
+for (i in 1:n_subjects) {
+  idx <- data_random$subject == i
+  data_random$outcome[idx] <- (beta0 + random_intercepts[i]) + 
+    (beta1 + random_slopes[i]) * data_random$time[idx] +
+    rnorm(sum(idx), 0, 5)
+}
+
+# Create comparison plot
+p1 <- ggplot(data_fixed, aes(x = time, y = outcome, group = subject)) +
+  geom_line(alpha = 0.3) +
+  stat_smooth(aes(group = 1), method = "lm", se = FALSE, color = "red", size = 1.5) +
+  labs(title = "Fixed Effects Only: Parallel Trajectories",
+       subtitle = "Same slope for all subjects",
+       x = "Time", y = "Outcome") +
+  ylim(40, 80)
+
+p2 <- ggplot(data_random, aes(x = time, y = outcome, group = subject)) +
+  geom_line(alpha = 0.3) +
+  stat_smooth(aes(group = 1), method = "lm", se = FALSE, color = "red", size = 1.5) +
+  labs(title = "Random Coefficients: Varying Trajectories",
+       subtitle = "Different slopes and intercepts per subject",
+       x = "Time", y = "Outcome") +
+  ylim(40, 80)
+
+p1 + p2 + plot_layout(ncol = 2)
+```
+
+### 1.2 Mathematical Formulation
+
+The general random coefficient model for subject $i$ at time $t$ is:
+
+$$
+y_{it} = (\beta_0 + b_{0i}) + (\beta_1 + b_{1i})x_{it} + \epsilon_{it}
+$$
+
+where:
+- $y_{it}$: Response variable
+- $\beta_0, \beta_1$: Fixed effects (population parameters)
+- $b_{0i}, b_{1i}$: Random effects (subject deviations)
+- $\epsilon_{it}$: Residual error
+- Assumptions: $b_i \sim N(0, G)$, $\epsilon_i \sim N(0, R_i)$, $Cov(b_i, \epsilon_i) = 0$
+
+```{r math_formulation, echo=TRUE}
+# Matrix formulation demonstration
+library(Matrix)
+
+# Simulate small dataset for matrix demonstration
+set.seed(123)
+n <- 5  # subjects
+t <- 4  # time points
+
+# Design matrices
+X <- cbind(1, rep(1:t, n))  # Fixed effects design
+Z <- kronecker(diag(n), cbind(1, 1:t))  # Random effects design
+
+# Parameter values
+beta <- c(50, 2)  # Fixed effects
+G <- matrix(c(25, -1, -1, 1), 2, 2)  # Random effects covariance
+sigma2 <- 4  # Residual variance
+
+# Generate random effects
+b <- mvtnorm::rmvnorm(n, mean = c(0, 0), sigma = G)
+b_vec <- as.vector(t(b))
+
+# Generate responses
+epsilon <- rnorm(n * t, 0, sqrt(sigma2))
+y <- X %*% beta + Z %*% b_vec + epsilon
+
+# Display matrices
+cat("Fixed effects design matrix X (first 10 rows):\n")
+print(X[1:10, ])
+
+cat("\nRandom effects design matrix Z (first 10 rows, first 10 columns):\n")
+print(as.matrix(Z[1:10, 1:10]))
+
+cat("\nFixed effects (beta):\n")
+print(beta)
+
+cat("\nRandom effects covariance matrix G:\n")
+print(G)
+
+cat("\nGenerated responses (first 10):\n")
+print(y[1:10])
+```
+
+## 2. Complete R Implementation Framework
+
+### 2.1 Data Simulation Engine
+
+```{r simulation_engine, echo=TRUE}
+# Comprehensive data simulation function for random coefficient models
+simulate_rcm_data <- function(
+  n_subjects = 100,
+  n_times = 5,
+  fixed_effects = c(intercept = 50, time = 2, treatment = 5, interaction = 1),
+  random_variance = c(intercept = 25, slope = 1, corr = -0.3),
+  residual_sd = 3,
+  treatment_ratio = 0.5,
+  dropout_rate = 0.2,
+  nonlinear = FALSE,
+  time_scale = "linear",
+  missing_mechanism = "MCAR"
+) {
+  
+  # Create base data frame
+  data <- expand.grid(
+    subject = factor(1:n_subjects),
+    time = seq(0, n_times - 1, length.out = n_times)
+  )
+  
+  # Assign treatment
+  n_treated <- round(n_subjects * treatment_ratio)
+  treatment_assignment <- sample(rep(c(0, 1), c(n_subjects - n_treated, n_treated)))
+  data$treatment <- factor(treatment_assignment[as.numeric(data$subject)])
+  
+  # Generate random effects
+  G <- matrix(c(random_variance["intercept"], 
+                random_variance["corr"] * sqrt(random_variance["intercept"] * random_variance["slope"]),
+                random_variance["corr"] * sqrt(random_variance["intercept"] * random_variance["slope"]),
+                random_variance["slope"]), 2, 2)
+  
+  random_effects <- MASS::mvrnorm(n_subjects, mu = c(0, 0), Sigma = G)
+  colnames(random_effects) <- c("b0", "b1")
+  
+  # Apply time scaling if specified
+  if (time_scale == "log") {
+    data$time_scaled <- log(data$time + 1)
+  } else if (time_scale == "sqrt") {
+    data$time_scaled <- sqrt(data$time)
+  } else {
+    data$time_scaled <- data$time
+  }
+  
+  # Generate linear predictor
+  data$eta <- fixed_effects["intercept"] + 
+    random_effects[as.numeric(data$subject), "b0"] +
+    (fixed_effects["time"] + random_effects[as.numeric(data$subject), "b1"]) * data$time_scaled +
+    fixed_effects["treatment"] * (as.numeric(data$treatment) - 1) +
+    fixed_effects["interaction"] * (as.numeric(data$treatment) - 1) * data$time_scaled
+  
+  # Add nonlinear component if requested
+  if (nonlinear) {
+    data$eta <- data$eta + 0.5 * data$time_scaled^2 - 0.1 * data$time_scaled^3
+  }
+  
+  # Generate outcome with residual error
+  data$outcome <- data$eta + rnorm(nrow(data), 0, residual_sd)
+  
+  # Apply missing data mechanism
+  if (missing_mechanism == "MCAR") {
+    # Missing completely at random
+    missing_prob <- dropout_rate
+    data$missing <- rbinom(nrow(data), 1, missing_prob)
+  } else if (missing_mechanism == "MAR") {
+    # Missing at random (depends on observed values)
+    data$missing_prob <- plogis(0.3 * (data$time > median(data$time)) - 
+                                  0.2 * scale(data$outcome))
+    data$missing <- rbinom(nrow(data), 1, data$missing_prob)
+  } else if (missing_mechanism == "MNAR") {
+    # Missing not at random (depends on unobserved values)
+    data$missing_prob <- plogis(0.5 * (data$outcome < median(data$outcome)))
+    data$missing <- rbinom(nrow(data), 1, data$missing_prob)
+  }
+  
+  # Create observed outcome with missing values
+  data$outcome_observed <- ifelse(data$missing == 1, NA, data$outcome)
+  
+  # Remove helper columns
+  data$eta <- NULL
+  data$missing_prob <- NULL
+  
+  # Add metadata
+  attr(data, "true_parameters") <- list(
+    fixed_effects = fixed_effects,
+    random_variance = random_variance,
+    residual_sd = residual_sd,
+    missing_mechanism = missing_mechanism
+  )
+  
+  return(data)
+}
+
+# Demonstrate the simulation function
+set.seed(123)
+sim_data <- simulate_rcm_data(
+  n_subjects = 50,
+  n_times = 6,
+  fixed_effects = c(intercept = 50, time = 2, treatment = 5, interaction = 0.8),
+  random_variance = c(intercept = 9, slope = 0.5, corr = -0.4),
+  residual_sd = 3,
+  treatment_ratio = 0.5,
+  dropout_rate = 0.1,
+  missing_mechanism = "MAR"
+)
+
+cat("Simulated dataset preview:\n")
+print(head(sim_data, 12))
+cat("\nDataset dimensions:", dim(sim_data))
+cat("\nMissing values:", sum(is.na(sim_data$outcome_observed)), "/", nrow(sim_data))
+```
+
+### 2.2 Comprehensive Model Fitting Function
+
+```{r model_fitting, echo=TRUE}
+# Master function to fit multiple random coefficient models
+fit_random_coefficient_models <- function(data, 
+                                          outcome_var = "outcome_observed",
+                                          time_var = "time",
+                                          subject_var = "subject",
+                                          treatment_var = "treatment",
+                                          method = "REML",
+                                          include_diagnostics = TRUE,
+                                          include_influence = FALSE) {
+  
+  results <- list()
+  
+  # Formula components
+  base_formula <- as.formula(paste(outcome_var, "~", time_var, "*", treatment_var))
+  ri_formula <- paste("(1 |", subject_var, ")")
+  ris_formula <- paste("(1 +", time_var, "|", subject_var, ")")
+  ris_uncor_formula <- paste("(1 |", subject_var, ") + (0 +", time_var, "|", subject_var, ")")
+  
+  # Model 1: Random intercept only
+  cat("Fitting Model 1: Random Intercept Only...\n")
+  formula1 <- update(base_formula, paste("~ . +", ri_formula))
+  model1 <- lmer(formula1, data = data, REML = (method == "REML"))
+  results$random_intercept <- model1
+  
+  # Model 2: Random intercept and slope (correlated)
+  cat("Fitting Model 2: Random Intercept + Slope (correlated)...\n")
+  formula2 <- update(base_formula, paste("~ . +", ris_formula))
+  model2 <- lmer(formula2, data = data, REML = (method == "REML"))
+  results$random_intercept_slope <- model2
+  
+  # Model 3: Random intercept and slope (uncorrelated)
+  cat("Fitting Model 3: Random Intercept + Slope (uncorrelated)...\n")
+  formula3 <- update(base_formula, paste("~ . +", ris_uncor_formula))
+  model3 <- lmer(formula3, data = data, REML = (method == "REML"))
+  results$random_intercept_slope_uncor <- model3
+  
+  # Model 4: Polynomial growth curve
+  cat("Fitting Model 4: Polynomial Growth Curve...\n")
+  formula4 <- as.formula(paste(outcome_var, "~ poly(", time_var, ", 2) *", 
+                               treatment_var, "+", ris_formula))
+  model4 <- lmer(formula4, data = data, REML = (method == "REML"))
+  results$polynomial_growth <- model4
+  
+  # Model 5: Model with complex covariance structure (using nlme)
+  cat("Fitting Model 5: Complex Covariance Structure (AR1)...\n")
+  tryCatch({
+    formula5 <- as.formula(paste(outcome_var, "~", time_var, "*", treatment_var))
+    model5 <- nlme::lme(formula5, 
+                        random = ~ 1 + time | subject,
+                        correlation = nlme::corAR1(form = ~ time | subject),
+                        data = data,
+                        method = method,
+                        na.action = na.omit,
+                        control = nlme::lmeControl(opt = "optim"))
+    results$complex_covariance <- model5
+  }, error = function(e) {
+    cat("Note: Complex covariance model failed:", e$message, "\n")
+  })
+  
+  # Model comparison
+  cat("\nComparing models using likelihood ratio tests...\n")
+  model_comparison <- anova(
+    results$random_intercept,
+    results$random_intercept_slope,
+    results$random_intercept_slope_uncor,
+    results$polynomial_growth
+  )
+  results$model_comparison <- model_comparison
+  
+  # Extract model summaries
+  results$summaries <- list(
+    random_intercept = summary(results$random_intercept),
+    random_intercept_slope = summary(results$random_intercept_slope),
+    random_intercept_slope_uncor = summary(results$random_intercept_slope_uncor),
+    polynomial_growth = summary(results$polynomial_growth)
+  )
+  
+  # Calculate performance metrics
+  results$performance <- compare_performance(
+    results$random_intercept,
+    results$random_intercept_slope,
+    results$random_intercept_slope_uncor,
+    results$polynomial_growth,
+    metrics = c("AIC", "BIC", "RMSE", "ICC", "R2")
+  )
+  
+  # Add diagnostics if requested
+  if (include_diagnostics) {
+    cat("\nComputing model diagnostics...\n")
+    # Ensure we only iterate over the first four fitted model objects
+    model_names <- names(results)
+    # select first four model entries that are of class lmerMod (if present)
+    candidate_names <- model_names[model_names %in% c("random_intercept", "random_intercept_slope", "random_intercept_slope_uncor", "polynomial_growth")]
+    results$diagnostics <- lapply(results[candidate_names], function(model) {
+      diag_list <- list(
+        residuals = residuals(model),
+        fitted = fitted(model),
+        random_effects = ranef(model)
+      )
+      if (isTRUE(include_influence)) {
+        if (requireNamespace("influence.ME", quietly = TRUE)) {
+          infl <- tryCatch({
+            influence.ME::influence(model, group = subject_var)
+          }, error = function(e) {
+            cat("Influence diagnostics failed:", e$message, "\n")
+            return(NULL)
+          })
+          diag_list$influence <- infl
+        } else {
+          cat("Package 'influence.ME' not installed. Skipping influence diagnostics.\n")
+        }
+      }
+      return(diag_list)
+    })
+  }
+  
+  # Add model selection recommendation
+  best_model_idx <- which.min(results$performance$AIC)
+  results$recommended_model <- names(results)[best_model_idx]
+  results$recommendation_reason <- paste(
+    "Model", results$recommended_model, 
+    "has the lowest AIC (", 
+    round(results$performance$AIC[best_model_idx], 2), ")"
+  )
+  
+  return(results)
+}
+
+# Fit models to simulated data (do not compute influence diagnostics by default)
+model_results <- fit_random_coefficient_models(sim_data, include_influence = FALSE)
+
+# Display model comparison
+cat("\n=== MODEL COMPARISON ===\n")
+print(model_results$model_comparison)
+
+cat("\n=== PERFORMANCE METRICS ===\n")
+print(model_results$performance)
+
+cat("\n=== RECOMMENDED MODEL ===\n")
+cat(model_results$recommendation_reason, "\n")
+```
+
+## 3. Clinical Trial Application: Pain Management Study
+
+### 3.1 Study Design and Data Generation
+
+```{r clinical_trial, echo=TRUE}
+# Complete clinical trial simulation: Post-operative pain assessment
+simulate_pain_trial <- function(
+  n_patients = 84,  # 28 per group
+  n_assessments = 7,  # Every 30 minutes for 3 hours
+  treatments = c("Placebo", "Standard", "Enhanced"),
+  baseline_pain = c(70, 65, 60),  # Baseline pain by treatment
+  pain_reduction = c(8, 12, 15),   # Pain reduction rate by treatment
+  adherence_rate = 0.95,
+  adverse_events = FALSE
+) {
+  
+  # Create longitudinal data structure
+  pain_data <- expand.grid(
+    patient = factor(1:n_patients),
+    time = seq(0, 3, length.out = n_assessments)  # Hours post-surgery
+  )
+  
+  # Random treatment assignment (balanced)
+  treatment_assignment <- rep(treatments, each = n_patients / length(treatments))
+  pain_data$treatment <- factor(treatment_assignment[pain_data$patient])
+  pain_data$treatment_code <- as.numeric(pain_data$treatment)
+  
+  # Generate patient characteristics
+  patient_chars <- data.frame(
+    patient = factor(1:n_patients),
+    age = round(rnorm(n_patients, 55, 10)),
+    sex = sample(c("Male", "Female"), n_patients, replace = TRUE),
+    bmi = round(rnorm(n_patients, 28, 4), 1),
+    surgery_duration = round(rnorm(n_patients, 90, 20)),  # minutes
+    pre_op_pain = round(runif(n_patients, 20, 50))
+  )
+  
+  # Merge with pain data
+  pain_data <- merge(pain_data, patient_chars, by = "patient")
+  
+  # Generate random effects (patient-specific pain trajectories)
+  set.seed(123)
+  G_pain <- matrix(c(36, -2.4, -2.4, 0.64), nrow = 2)  # Intercept-slope covariance
+  
+  random_effects <- MASS::mvrnorm(n_patients, 
+                                  mu = c(0, 0), 
+                                  Sigma = G_pain)
+  colnames(random_effects) <- c("b0", "b1")
+  
+  # Treatment-specific effects
+  treatment_map <- data.frame(
+    treatment = treatments,
+    baseline_effect = baseline_pain,
+    slope_effect = pain_reduction
+  )
+  
+  # Generate pain scores
+  pain_data$true_pain <- NA_real_
+  
+  for (trt in treatments) {
+    idx <- pain_data$treatment == trt
+    trt_idx <- which(treatments == trt)
+    
+    # Fixed effects component
+    fixed_effect <- treatment_map$baseline_effect[trt_idx] - 
+      treatment_map$slope_effect[trt_idx] * pain_data$time[idx]
+    
+    # Random effects component
+    patient_ids <- as.numeric(pain_data$patient[idx])
+    re_intercept <- random_effects[patient_ids, "b0"]
+    re_slope <- random_effects[patient_ids, "b1"]
+    
+    # Covariate effects
+    covariate_effect <- 0.1 * pain_data$pre_op_pain[idx] - 
+      0.05 * (pain_data$age[idx] - 55) +
+      0.02 * (pain_data$bmi[idx] - 28)
+    
+    # Generate true pain score
+    pain_data$true_pain[idx] <- fixed_effect + 
+      re_intercept + 
+      re_slope * pain_data$time[idx] +
+      covariate_effect
+    
+    # Add nonlinear decay (pain reduction slows over time)
+    pain_data$true_pain[idx] <- pain_data$true_pain[idx] - 
+      0.5 * treatment_map$slope_effect[trt_idx] * pain_data$time[idx]^2
+  }
+  
+  # Add measurement error
+  pain_data$observed_pain <- pain_data$true_pain + 
+    rnorm(nrow(pain_data), 0, 3)
+  
+  # Ensure pain scores are within 0-100 scale
+  pain_data$observed_pain <- pmax(0, pmin(100, pain_data$observed_pain))
+  
+  # Simulate missing data due to adherence
+  pain_data$adherent <- rbinom(nrow(pain_data), 1, adherence_rate)
+  pain_data$pain_score <- ifelse(pain_data$adherent == 1, 
+                                 pain_data$observed_pain, NA)
+  
+  # Simulate adverse events if requested
+  if (adverse_events) {
+    # Higher probability for active treatments
+    ae_prob <- ifelse(pain_data$treatment == "Placebo", 0.05,
+                      ifelse(pain_data$treatment == "Standard", 0.10, 0.15))
+    pain_data$adverse_event <- rbinom(nrow(pain_data), 1, ae_prob)
+  }
+  
+  # Calculate derived metrics
+  pain_data <- pain_data %>%
+    group_by(patient) %>%
+    mutate(
+      pain_reduction = first(pain_score, na_rm = TRUE) - last(pain_score, na_rm = TRUE),
+      auc_pain = sum(pain_score * c(diff(time), 0), na.rm = TRUE)  # Area under curve
+    ) %>%
+    ungroup()
+  
+  # Add metadata
+  attr(pain_data, "simulation_params") <- list(
+    treatments = treatments,
+    baseline_pain = baseline_pain,
+    pain_reduction = pain_reduction,
+    random_effects_cov = G_pain,
+    adherence_rate = adherence_rate
+  )
+  
+  return(pain_data)
+}
+
+# Generate clinical trial data
+set.seed(123)
+pain_study <- simulate_pain_trial(
+  n_patients = 84,
+  n_assessments = 7,
+  treatments = c("Placebo", "Standard", "Enhanced"),
+  baseline_pain = c(72, 68, 65),
+  pain_reduction = c(6, 10, 14),
+  adherence_rate = 0.92,
+  adverse_events = TRUE
+)
+
+# Visualize the trial data
+p1 <- ggplot(pain_study, aes(x = time, y = pain_score, 
+                             group = patient, color = treatment)) +
+  geom_line(alpha = 0.2) +
+  stat_smooth(aes(group = treatment), method = "loess", 
+              se = TRUE, size = 1.5) +
+  labs(title = "Post-Operative Pain Trajectories by Treatment",
+       x = "Hours Post-Surgery", y = "Pain Score (0-100)") +
+  scale_color_brewer(palette = "Set1") +
+  theme(legend.position = "bottom")
+
+p2 <- pain_study %>%
+  filter(!is.na(pain_score)) %>%
+  ggplot(aes(x = time, y = pain_score, fill = treatment)) +
+  geom_boxplot(outlier.alpha = 0.3) +
+  labs(title = "Pain Score Distribution Over Time",
+       x = "Hours Post-Surgery", y = "Pain Score") +
+  scale_fill_brewer(palette = "Set2") +
+  facet_wrap(~ treatment, ncol = 3)
+
+p1 / p2 + plot_layout(heights = c(2, 1))
+```
+
+### 3.2 Comprehensive Clinical Trial Analysis
+
+```{r clinical_analysis, echo=TRUE}
+# Complete clinical trial analysis pipeline
+analyze_pain_trial <- function(pain_data, 
+                               primary_endpoint = "pain_score",
+                               time_var = "time",
+                               treatment_var = "treatment",
+                               patient_var = "patient") {
+  
+  results <- list()
+  
+  # 1. Descriptive statistics
+  cat("=== DESCRIPTIVE STATISTICS ===\n")
+  desc_stats <- pain_data %>%
+    filter(!is.na(.data[[primary_endpoint]])) %>%
+    group_by(.data[[treatment_var]], .data[[time_var]]) %>%
+    summarise(
+      n = n(),
+      mean = mean(.data[[primary_endpoint]]),
+      sd = sd(.data[[primary_endpoint]]),
+      median = median(.data[[primary_endpoint]]),
+      q25 = quantile(.data[[primary_endpoint]], 0.25),
+      q75 = quantile(.data[[primary_endpoint]], 0.75),
+      .groups = "drop"
+    )
+  
+  print(desc_stats)
+  results$descriptive <- desc_stats
+  
+  # 2. Primary analysis: Random coefficient model
+  cat("\n=== PRIMARY ANALYSIS: RANDOM COEFFICIENT MODEL ===\n")
+  
+  # Model 1: Basic random intercept and slope
+  formula1 <- as.formula(paste(primary_endpoint, "~", time_var, "*", 
+                               treatment_var, "+ (1 +", time_var, "|", patient_var, ")"))
+  model_primary <- lmer(formula1, data = pain_data, REML = TRUE)
+  
+  cat("Primary Model Summary:\n")
+  print(summary(model_primary))
+  results$primary_model <- model_primary
+  
+  # 3. Secondary analyses
+  cat("\n=== SECONDARY ANALYSES ===\n")
+  
+  # a) Model with baseline covariates
+  formula2 <- as.formula(paste(primary_endpoint, "~", time_var, "*", treatment_var,
+                               "+ age + sex + bmi + pre_op_pain +",
+                               "(1 +", time_var, "|", patient_var, ")"))
+  model_covariates <- lmer(formula2, data = pain_data, REML = TRUE)
+  results$covariate_model <- model_covariates
+  
+  # b) Model with nonlinear time effect
+  formula3 <- as.formula(paste(primary_endpoint, "~ poly(", time_var, ", 2) *", 
+                               treatment_var, "+ (1 +", time_var, "|", patient_var, ")"))
+  model_nonlinear <- lmer(formula3, data = pain_data, REML = TRUE)
+  results$nonlinear_model <- model_nonlinear
+  
+  # c) Model with heteroscedastic errors
+  library(glmmTMB)
+  formula4 <- as.formula(paste(primary_endpoint, "~", time_var, "*", treatment_var,
+                               "+ (1 +", time_var, "|", patient_var, ")"))
+  model_hetero <- glmmTMB(formula4, 
+                          dispformula = ~ treatment_var + time_var,
+                          data = pain_data)
+  results$heteroscedastic_model <- model_hetero
+  
+  # 4. Treatment effect estimation
+  cat("\n=== TREATMENT EFFECT ESTIMATION ===\n")
+  
+  # Marginal means at key time points
+  emm_time <- emmeans(model_primary, 
+                      specs = pairwise ~ treatment_var,
+                      at = list(time_var = c(0, 1, 2, 3)))
+  
+  cat("Estimated Marginal Means at Different Time Points:\n")
+  print(emm_time$emmeans)
+  
+  cat("\nPairwise Comparisons:\n")
+  print(emm_time$contrasts)
+  
+  results$treatment_effects <- emm_time
+  
+  # 5. Individual response prediction
+  cat("\n=== INDIVIDUAL RESPONSE PREDICTION ===\n")
+  
+  # Predict pain trajectories for new patients
+  new_patient <- data.frame(
+    patient = factor("new"),
+    time = seq(0, 3, length.out = 50),
+    treatment = factor("Enhanced", levels = levels(pain_data[[treatment_var]])),
+    age = 55,
+    sex = "Female",
+    bmi = 28,
+    pre_op_pain = 35
+  )
+  
+  # Marginal predictions (population average)
+  new_patient$pred_marginal <- predict(model_primary, 
+                                       newdata = new_patient, 
+                                       re.form = NA)
+  
+  # Conditional predictions (with average random effects)
+  new_patient$pred_conditional <- predict(model_primary,
+                                          newdata = new_patient,
+                                          re.form = ~ (1 + time | patient),
+                                          allow.new.levels = TRUE)
+  
+  results$predictions <- new_patient
+  
+  # 6. Model diagnostics
+  cat("\n=== MODEL DIAGNOSTICS ===\n")
+  
+  diagnostics <- check_model(model_primary, 
+                             check = c("normality", "homogeneity", 
+                                      "outliers", "qq", "pp_check"))
+  results$diagnostics <- diagnostics
+  
+  # 7. Missing data analysis
+  cat("\n=== MISSING DATA ANALYSIS ===\n")
+  
+  missing_patterns <- pain_data %>%
+    group_by(.data[[patient_var]]) %>%
+    summarise(
+      n_obs = sum(!is.na(.data[[primary_endpoint]])),
+      n_miss = sum(is.na(.data[[primary_endpoint]])),
+      prop_miss = n_miss / n(),
+      last_observed = max(.data[[time_var]][!is.na(.data[[primary_endpoint]])])
+    )
+  
+  cat("Missing Data Summary:\n")
+  print(summary(missing_patterns$prop_miss))
+  
+  results$missing_data <- missing_patterns
+  
+  # 8. Sensitivity analyses
+  cat("\n=== SENSITIVITY ANALYSES ===\n")
+  
+  # a) Complete case analysis
+  complete_data <- pain_data[complete.cases(pain_data[, c(primary_endpoint, 
+                                                         time_var, 
+                                                         treatment_var)]), ]
+  model_complete <- update(model_primary, data = complete_data)
+  
+  # b) LOCF imputation
+  pain_data_locf <- pain_data %>%
+    group_by(.data[[patient_var]]) %>%
+    mutate(pain_score_locf = na.locf(.data[[primary_endpoint]], 
+                                     na.rm = FALSE)) %>%
+    ungroup()
+  
+  model_locf <- update(model_primary, 
+                       data = pain_data_locf,
+                       formula = as.formula(paste("pain_score_locf ~", 
+                                                 paste(all.vars(formula(model_primary))[-1], 
+                                                       collapse = " + "))))
+  
+  results$sensitivity <- list(
+    complete_case = model_complete,
+    locf = model_locf,
+    n_complete = nrow(complete_data),
+    n_locf = sum(!is.na(pain_data_locf$pain_score_locf))
+  )
+  
+  # 9. Create comprehensive report
+  results$report <- list(
+    n_patients = n_distinct(pain_data[[patient_var]]),
+    n_observations = sum(!is.na(pain_data[[primary_endpoint]])),
+    proportion_missing = mean(is.na(pain_data[[primary_endpoint]])),
+    primary_model_formula = formula1,
+    treatment_effects_summary = summary(emm_time$contrasts),
+    model_performance = performance(model_primary)
+  )
+  
+  return(results)
+}
+
+# Run complete clinical trial analysis
+trial_results <- analyze_pain_trial(pain_study)
+
+# Generate comprehensive summary report
+generate_clinical_report <- function(results) {
+  cat("=" * 60, "\n")
+  cat("CLINICAL TRIAL ANALYSIS REPORT\n")
+  cat("=" * 60, "\n\n")
+  
+  cat("STUDY CHARACTERISTICS:\n")
+  cat("-" * 40, "\n")
+  cat("Number of patients:", results$report$n_patients, "\n")
+  cat("Number of observations:", results$report$n_observations, "\n")
+  cat("Proportion missing:", round(results$report$proportion_missing * 100, 1), "%\n\n")
+  
+  cat("PRIMARY ANALYSIS RESULTS:\n")
+  cat("-" * 40, "\n")
+  print(summary(results$primary_model))
+  
+  cat("\nTREATMENT EFFECTS:\n")
+  cat("-" * 40, "\n")
+  print(results$treatment_effects$contrasts)
+  
+  cat("\nMODEL PERFORMANCE:\n")
+  cat("-" * 40, "\n")
+  print(results$report$model_performance)
+  
+  cat("\nSENSITIVITY ANALYSES:\n")
+  cat("-" * 40, "\n")
+  cat("Complete case analysis (n =", results$sensitivity$n_complete, "):\n")
+  print(fixef(results$sensitivity$complete_case))
+  cat("\nLOCF imputation (n =", results$sensitivity$n_locf, "):\n")
+  print(fixef(results$sensitivity$locf))
+}
+
+# Generate the report
+generate_clinical_report(trial_results)
+```
+
+### 3.3 Advanced Clinical Trial Visualizations
+
+```{r clinical_visualizations, echo=TRUE, fig.height=10}
+# Comprehensive visualization suite for clinical trial data
+create_clinical_visualizations <- function(pain_data, analysis_results) {
+  
+  plots <- list()
+  
+  # 1. Spaghetti plot with treatment trajectories
+  plots$trajectories <- ggplot(pain_data, aes(x = time, y = pain_score, 
+                                              group = patient, color = treatment)) +
+    geom_line(alpha = 0.3, linewidth = 0.5) +
+    stat_smooth(aes(group = treatment), method = "loess", 
+                se = TRUE, size = 1.5, alpha = 0.2) +
+    labs(title = "Individual Pain Trajectories by Treatment",
+         subtitle = "With treatment-specific smoothed trends",
+         x = "Hours Post-Surgery", y = "Pain Score (0-100)") +
+    scale_color_brewer(palette = "Set1") +
+    theme_minimal() +
+    facet_wrap(~ treatment, ncol = 3) +
+    theme(legend.position = "none")
+  
+  # 2. Treatment effect over time
+  emm_data <- as.data.frame(analysis_results$treatment_effects$emmeans)
+  
+  plots$treatment_effects <- ggplot(emm_data, aes(x = time, y = emmean, 
+                                                  color = treatment, group = treatment)) +
+    geom_line(size = 1.5) +
+    geom_ribbon(aes(ymin = lower.CL, ymax = upper.CL, fill = treatment), 
+                alpha = 0.2) +
+    labs(title = "Estimated Marginal Means by Treatment",
+         subtitle = "With 95% confidence intervals",
+         x = "Hours Post-Surgery", y = "Estimated Pain Score") +
+    scale_color_brewer(palette = "Set1") +
+    scale_fill_brewer(palette = "Set1") +
+    theme_minimal()
+  
+  # 3. Random effects distribution
+  re_data <- as.data.frame(ranef(analysis_results$primary_model)$patient)
+  colnames(re_data) <- c("Intercept", "Slope")
+  
+  plots$random_effects <- ggplot(re_data, aes(x = Intercept, y = Slope)) +
+    geom_point(alpha = 0.6, size = 2) +
+    geom_density_2d(color = "red", alpha = 0.5) +
+    geom_hline(yintercept = 0, linetype = "dashed", alpha = 0.5) +
+    geom_vline(xintercept = 0, linetype = "dashed", alpha = 0.5) +
+    labs(title = "Distribution of Random Effects",
+         subtitle = "Patient-specific intercepts and slopes",
+         x = "Random Intercept", y = "Random Slope") +
+    theme_minimal()
+  
+  # 4. Model diagnostics
+  # Residuals vs fitted
+  diag_data <- data.frame(
+    fitted = fitted(analysis_results$primary_model),
+    residuals = residuals(analysis_results$primary_model, type = "pearson"),
+    treatment = pain_data$treatment[!is.na(pain_data$pain_score)]
+  )
+  
+  plots$residuals <- ggplot(diag_data, aes(x = fitted, y = residuals, color = treatment)) +
+    geom_point(alpha = 0.6) +
+    geom_hline(yintercept = 0, linetype = "dashed", color = "red") +
+    geom_smooth(method = "loess", se = FALSE) +
+    labs(title = "Residuals vs Fitted Values",
+         subtitle = "Checking homoscedasticity",
+         x = "Fitted Values", y = "Pearson Residuals") +
+    scale_color_brewer(palette = "Set1") +
+    theme_minimal()
+  
+  # 5. Individual predictions for example patients
+  example_patients <- sample(unique(pain_data$patient), 9)
+  example_data <- pain_data %>% 
+    filter(patient %in% example_patients) %>%
+    mutate(predicted = predict(analysis_results$primary_model))
+  
+  plots$individual_predictions <- ggplot(example_data, aes(x = time)) +
+    geom_point(aes(y = pain_score, color = "Observed"), size = 2) +
+    geom_line(aes(y = predicted, color = "Predicted"), size = 1) +
+    labs(title = "Observed vs Predicted Values for Example Patients",
+         x = "Hours Post-Surgery", y = "Pain Score") +
+    scale_color_manual(values = c("Observed" = "blue", "Predicted" = "red")) +
+    facet_wrap(~ patient, scales = "free_y", ncol = 3) +
+    theme_minimal() +
+    theme(legend.position = "bottom")
+  
+  # 6. Treatment response heterogeneity
+  patient_effects <- pain_data %>%
+    group_by(patient, treatment) %>%
+    summarise(
+      baseline = first(pain_score, na_rm = TRUE),
+      final = last(pain_score, na_rm = TRUE),
+      change = baseline - final,
+      .groups = "drop"
+    )
+  
+  plots$response_heterogeneity <- ggplot(patient_effects, 
+                                         aes(x = treatment, y = change, fill = treatment)) +
+    geom_violin(alpha = 0.5) +
+    geom_boxplot(width = 0.2, alpha = 0.7) +
+    geom_jitter(width = 0.1, alpha = 0.3, size = 1) +
+    labs(title = "Treatment Response Heterogeneity",
+         subtitle = "Distribution of pain reduction by treatment",
+         x = "Treatment", y = "Pain Reduction (0-3 hours)") +
+    scale_fill_brewer(palette = "Set2") +
+    theme_minimal()
+  
+  # Combine all plots
+  combined_plot <- (plots$trajectories | plots$treatment_effects) /
+    (plots$random_effects | plots$residuals) /
+    plots$individual_predictions /
+    plots$response_heterogeneity +
+    plot_layout(heights = c(2, 1.5, 2, 1)) +
+    plot_annotation(
+      title = "Comprehensive Clinical Trial Analysis Visualizations",
+      subtitle = "Random Coefficient Model Application to Pain Management Study",
+      theme = theme(plot.title = element_text(size = 16, face = "bold"),
+                    plot.subtitle = element_text(size = 12))
+    )
+  
+  return(list(individual_plots = plots, combined_plot = combined_plot))
+}
+
+# Generate visualizations
+clinical_viz <- create_clinical_visualizations(pain_study, trial_results)
+
+# Display combined visualization
+print(clinical_viz$combined_plot)
+
+# Save individual plots if needed
+# ggsave("clinical_trial_analysis.png", clinical_viz$combined_plot, 
+#        width = 16, height = 20, dpi = 300)
+```
+
+## 4. Growth Curve Analysis: Pediatric Development Study
+
+### 4.1 Longitudinal Growth Data Simulation
+
+```{r growth_analysis, echo=TRUE}
+# Complete growth curve analysis module
+analyze_growth_data <- function() {
+  
+  # Simulate comprehensive growth dataset
+  set.seed(123)
+  n_children <- 200
+  ages <- seq(0, 18, by = 0.5)  # Birth to 18 years, every 6 months
+  
+  growth_data <- expand.grid(
+    child_id = factor(1:n_children),
+    age = ages
+  )
+  
+  # Add child characteristics
+  child_chars <- data.frame(
+    child_id = factor(1:n_children),
+    sex = sample(c("Male", "Female"), n_children, replace = TRUE, prob = c(0.51, 0.49)),
+    birth_weight = round(rnorm(n_children, 3.5, 0.5), 2),
+    gestational_age = round(rnorm(n_children, 39, 1)),
+    maternal_height = round(rnorm(n_children, 165, 6)),
+    paternal_height = round(rnorm(n_children, 178, 7)),
+    socioeconomic_status = sample(c("Low", "Medium", "High"), n_children, 
+                                  replace = TRUE, prob = c(0.3, 0.4, 0.3))
+  )
+  
+  # Merge with growth data
+  growth_data <- merge(growth_data, child_chars, by = "child_id")
+  
+  # Generate genetic height potential
+  growth_data$genetic_potential <- with(growth_data, 
+                                        (maternal_height + paternal_height + 13) / 2)
+  
+  # Simulate growth trajectories using Preece-Baines model
+  simulate_preece_baines <- function(age, h1, h2, theta1, theta2, s1, s2) {
+    # Preece-Baines model for human growth
+    h1 - 2*(h1 - h2) / (exp(s1*(age - theta1)) + exp(s2*(age - theta2)))
+  }
+  
+  # Generate individual growth parameters
+  growth_params <- data.frame(
+    child_id = factor(1:n_children),
+    h1 = rnorm(n_children, 175, 5) +  # Adult height
+      ifelse(child_chars$sex == "Male", 13, 0),
+    h2 = rnorm(n_children, 150, 4),   # Height at adolescence
+    theta1 = rnorm(n_children, 2, 0.3),   # Age at take-off
+    theta2 = rnorm(n_children, 14, 0.5),  # Age at adult height
+    s1 = runif(n_children, 0.8, 1.2),     # Growth rate 1
+    s2 = runif(n_children, 0.05, 0.15)    # Growth rate 2
+  )
+  
+  # Add sex-specific adjustments
+  growth_params <- merge(growth_params, child_chars[, c("child_id", "sex")], 
+                         by = "child_id")
+  growth_params$h1 <- growth_params$h1 + ifelse(growth_params$sex == "Male", 13, 0)
+  growth_params$theta2 <- growth_params$theta2 + ifelse(growth_params$sex == "Male", 0.5, -0.5)
+  
+  # Calculate true heights
+  growth_data$true_height <- NA_real_
+  
+  for (i in 1:n_children) {
+    idx <- growth_data$child_id == i
+    params <- growth_params[growth_params$child_id == i, ]
+    
+    # Birth length (approx 0.3 * adult height)
+    birth_length <- params$h1 * 0.3 + rnorm(1, 0, 2)
+    
+    # Calculate heights
+    heights <- simulate_preece_baines(
+      growth_data$age[idx],
+      params$h1,
+      params$h2,
+      params$theta1,
+      params$theta2,
+      params$s1,
+      params$s2
+    )
+    
+    # Adjust for birth
+    heights[growth_data$age[idx] == 0] <- birth_length
+    
+    growth_data$true_height[idx] <- heights
+  }
+  
+  # Add measurement error (larger in infancy)
+  growth_data$measurement_error <- ifelse(growth_data$age < 1, 1.5,
+                                          ifelse(growth_data$age < 5, 1.0, 0.7))
+  
+  growth_data$observed_height <- growth_data$true_height + 
+    rnorm(nrow(growth_data), 0, growth_data$measurement_error)
+  
+  # Simulate missing data (less frequent measurements in older ages)
+  growth_data$measurement_prob <- plogis(2 - 0.1 * growth_data$age)
+  growth_data$measured <- rbinom(nrow(growth_data), 1, growth_data$measurement_prob)
+  growth_data$height <- ifelse(growth_data$measured == 1, 
+                               growth_data$observed_height, NA)
+  
+  # Calculate growth velocity
+  growth_data <- growth_data %>%
+    group_by(child_id) %>%
+    arrange(age) %>%
+    mutate(
+      velocity = c(NA, diff(height)) / c(NA, diff(age)),
+      height_percentile = ecdf(height)(height) * 100
+    ) %>%
+    ungroup()
+  
+  # Add growth milestones
+  growth_data <- growth_data %>%
+    group_by(child_id) %>%
+    mutate(
+      doubled_birth = any(height >= 2 * first(height[age == 0], na.rm = TRUE), na.rm = TRUE),
+      puberty_growth_spurt = any(velocity > 8, na.rm = TRUE, na.rm = TRUE),
+      adult_height_reached = any(age >= 16 & velocity < 0.5, na.rm = TRUE)
+    ) %>%
+    ungroup()
+  
+  # Remove helper columns
+  growth_data$true_height <- NULL
+  growth_data$measurement_error <- NULL
+  growth_data$measured <- NULL
+  
+  return(list(data = growth_data, parameters = growth_params))
+}
+
+# Generate growth data
+growth_results <- analyze_growth_data()
+growth_data <- growth_results$data
+
+# Visualize growth trajectories
+p_growth1 <- ggplot(growth_data %>% filter(!is.na(height)), 
+                    aes(x = age, y = height, group = child_id, color = sex)) +
+  geom_line(alpha = 0.1) +
+  stat_smooth(aes(group = sex), method = "gam", se = TRUE, size = 1.5) +
+  labs(title = "Longitudinal Height Growth Trajectories",
+       subtitle = "Individual paths with sex-specific smoothed trends",
+       x = "Age (years)", y = "Height (cm)") +
+  scale_color_manual(values = c("Male" = "blue", "Female" = "red")) +
+  theme_minimal()
+
+p_growth2 <- growth_data %>%
+  filter(!is.na(velocity)) %>%
+  ggplot(aes(x = age, y = velocity, color = sex, fill = sex)) +
+  geom_smooth(method = "loess", se = TRUE, alpha = 0.2) +
+  labs(title = "Growth Velocity by Age and Sex",
+       subtitle = "Peak velocity during adolescent growth spurt",
+       x = "Age (years)", y = "Growth Velocity (cm/year)") +
+  scale_color_manual(values = c("Male" = "blue", "Female" = "red")) +
+  scale_fill_manual(values = c("Male" = "blue", "Female" = "red")) +
+  theme_minimal() +
+  ylim(0, 15)
+
+p_growth3 <- growth_data %>%
+  filter(!is.na(height), age %in% c(0, 2, 5, 10, 15, 18)) %>%
+  ggplot(aes(x = factor(age), y = height, fill = sex)) +
+  geom_violin(alpha = 0.5) +
+  geom_boxplot(width = 0.2, alpha = 0.7) +
+  labs(title = "Height Distribution at Key Ages",
+       x = "Age (years)", y = "Height (cm)") +
+  scale_fill_manual(values = c("Male" = "blue", "Female" = "red")) +
+  theme_minimal() +
+  facet_wrap(~ sex, ncol = 2)
+
+(p_growth1 / p_growth2) | p_growth3
+```
+
+### 4.2 Advanced Growth Curve Modeling
+
+```{r growth_modeling, echo=TRUE}
+# Comprehensive growth curve modeling
+fit_growth_models <- function(growth_data) {
+  
+  results <- list()
+  
+  # Filter to complete cases for modeling
+  model_data <- growth_data %>% filter(!is.na(height), !is.na(sex))
+  
+  # 1. Linear mixed model with random intercept and slope
+  cat("=== MODEL 1: LINEAR GROWTH MODEL ===\n")
+  model_linear <- lmer(height ~ age * sex + (1 + age | child_id), 
+                       data = model_data, REML = TRUE)
+  results$linear <- model_linear
+  print(summary(model_linear))
+  
+  # 2. Quadratic growth model
+  cat("\n=== MODEL 2: QUADRATIC GROWTH MODEL ===\n")
+  model_quad <- lmer(height ~ poly(age, 2) * sex + (1 + age + I(age^2) | child_id), 
+                     data = model_data, REML = TRUE)
+  results$quadratic <- model_quad
+  print(summary(model_quad))
+  
+  # 3. Natural cubic spline model
+  cat("\n=== MODEL 3: NATURAL CUBIC SPLINE MODEL ===\n")
+  library(splines)
+  model_spline <- lmer(height ~ ns(age, df = 4) * sex + (1 + ns(age, df = 2) | child_id), 
+                       data = model_data, REML = TRUE)
+  results$spline <- model_spline
+  print(summary(model_spline))
+  
+  # 4. Piecewise linear model (break at puberty)
+  cat("\n=== MODEL 4: PIECEWISE LINEAR MODEL ===\n")
+  model_piecewise <- lmer(height ~ age * sex + I(pmax(age - 10, 0)) * sex + 
+                           (1 + age + I(pmax(age - 10, 0)) | child_id), 
+                         data = model_data, REML = TRUE)
+  results$piecewise <- model_piecewise
+  print(summary(model_piecewise))
+  
+  # 5. Functional principal component analysis (simplified)
+  cat("\n=== MODEL 5: FUNCTIONAL DATA ANALYSIS APPROACH ===\n")
+  library(mgcv)
+  model_gam <- gam(height ~ sex + s(age, by = sex, k = 10) + 
+                     s(child_id, bs = "re") + s(age, child_id, bs = "re"),
+                   data = model_data, method = "REML")
+  results$gam <- model_gam
+  print(summary(model_gam))
+  
+  # Model comparison
+  cat("\n=== MODEL COMPARISON ===\n")
+  comparison <- data.frame(
+    Model = c("Linear", "Quadratic", "Spline", "Piecewise", "GAM"),
+    AIC = c(AIC(model_linear), AIC(model_quad), AIC(model_spline), 
+            AIC(model_piecewise), AIC(model_gam)),
+    BIC = c(BIC(model_linear), BIC(model_quad), BIC(model_spline), 
+            BIC(model_piecewise), BIC(model_gam)),
+    LogLik = c(logLik(model_linear), logLik(model_quad), logLik(model_spline),
+               logLik(model_piecewise), logLik(model_gam)),
+    RMSE = c(sqrt(mean(residuals(model_linear)^2)),
+             sqrt(mean(residuals(model_quad)^2)),
+             sqrt(mean(residuals(model_spline)^2)),
+             sqrt(mean(residuals(model_piecewise)^2)),
+             sqrt(mean(residuals(model_gam)^2)))
+  )
+  
+  print(comparison)
+  results$comparison <- comparison
+  
+  # Predict adult height
+  cat("\n=== ADULT HEIGHT PREDICTION ===\n")
+  adult_pred <- expand.grid(
+    child_id = unique(model_data$child_id[1:10]),  # First 10 children
+    age = 18,
+    sex = c("Male", "Female")
+  )
+  
+  adult_pred$pred_linear <- predict(model_linear, newdata = adult_pred, re.form = NA)
+  adult_pred$pred_quad <- predict(model_quad, newdata = adult_pred, re.form = NA)
+  adult_pred$pred_spline <- predict(model_spline, newdata = adult_pred, re.form = NA)
+  
+  print(head(adult_pred))
+  results$predictions <- adult_pred
+  
+  # Growth velocity calculation
+  cat("\n=== GROWTH VELOCITY ESTIMATION ===\n")
+  
+  # Create dense age grid for velocity calculation
+  age_grid <- seq(0, 18, length.out = 100)
+  pred_grid <- expand.grid(
+    age = age_grid,
+    sex = c("Male", "Female"),
+    child_id = NA
+  )
+  
+  # Predict heights
+  pred_grid$height <- predict(model_spline, newdata = pred_grid, re.form = NA)
+  
+  # Calculate velocity (derivative)
+  velocity_data <- pred_grid %>%
+    group_by(sex) %>%
+    arrange(age) %>%
+    mutate(
+      velocity = c(NA, diff(height)) / c(NA, diff(age)),
+      acceleration = c(NA, diff(velocity)) / c(NA, diff(age))
+    ) %>%
+    ungroup()
+  
+  # Find peak growth velocity
+  peak_velocity <- velocity_data %>%
+    group_by(sex) %>%
+    filter(velocity == max(velocity, na.rm = TRUE)) %>%
+    select(sex, age, peak_velocity = velocity)
+  
+  print(peak_velocity)
+  results$velocity <- velocity_data
+  results$peak_velocity <- peak_velocity
+  
+  # Calculate growth percentiles
+  cat("\n=== GROWTH PERCENTILES ===\n")
+  
+  percentiles <- model_data %>%
+    group_by(sex, round(age, 1)) %>%
+    summarise(
+      age = mean(age),
+      n = n(),
+      mean = mean(height),
+      sd = sd(height),
+      p3 = quantile(height, 0.03),
+      p10 = quantile(height, 0.10),
+      p25 = quantile(height, 0.25),
+      p50 = quantile(height, 0.50),
+      p75 = quantile(height, 0.75),
+      p90 = quantile(height, 0.90),
+      p97 = quantile(height, 0.97),
+      .groups = "drop"
+    )
+  
+  print(head(percentiles))
+  results$percentiles <- percentiles
+  
+  # Individual growth curve assessment
+  cat("\n=== INDIVIDUAL GROWTH ASSESSMENT ===\n")
+  
+  # Calculate individual deviations from population curve
+  model_data$predicted <- predict(model_spline)
+  model_data$residual <- model_data$height - model_data$predicted
+  model_data$z_score <- scale(model_data$residual)
+  
+  # Identify children with unusual growth patterns
+  unusual_growth <- model_data %>%
+    group_by(child_id) %>%
+    summarise(
+      mean_z = mean(z_score, na.rm = TRUE),
+      sd_z = sd(z_score, na.rm = TRUE),
+      max_abs_z = max(abs(z_score), na.rm = TRUE),
+      n_obs = n(),
+      .groups = "drop"
+    ) %>%
+    filter(max_abs_z > 2.5)  # More than 2.5 SD from expected
+    
+  cat("Children with unusual growth patterns:", nrow(unusual_growth), "\n")
+  results$unusual_growth <- unusual_growth
+  
+  return(results)
+}
+
+# Run growth curve analysis
+growth_models <- fit_growth_models(growth_data)
+
+# Create growth curve visualizations
+create_growth_visualizations <- function(growth_data, growth_results) {
+  
+  plots <- list()
+  
+  # 1. Model comparison visualization
+  comp_data <- growth_results$comparison %>%
+    pivot_longer(cols = c(AIC, BIC, LogLik, RMSE), 
+                 names_to = "metric", values_to = "value")
+  
+  plots$model_comparison <- ggplot(comp_data, aes(x = Model, y = value, fill = Model)) +
+    geom_bar(stat = "identity", alpha = 0.7) +
+    facet_wrap(~ metric, scales = "free_y") +
+    labs(title = "Growth Model Comparison",
+         subtitle = "Various metrics for model selection") +
+    theme_minimal() +
+    theme(axis.text.x = element_text(angle = 45, hjust = 1),
+          legend.position = "none")
+  
+  # 2. Predicted growth curves
+  pred_curve <- expand.grid(
+    age = seq(0, 18, length.out = 100),
+    sex = c("Male", "Female"),
+    child_id = NA
+  )
+  
+  # Predict using spline model
+  pred_curve$height <- predict(growth_results$spline, 
+                               newdata = pred_curve, 
+                               re.form = NA)
+  
+  plots$growth_curves <- ggplot(pred_curve, aes(x = age, y = height, color = sex)) +
+    geom_line(size = 1.5) +
+    geom_point(data = growth_data %>% filter(!is.na(height)) %>% sample_n(1000),
+               aes(x = age, y = height), alpha = 0.1, size = 0.5) +
+    labs(title = "Population Growth Curves by Sex",
+         subtitle = "Predicted from natural cubic spline model",
+         x = "Age (years)", y = "Height (cm)") +
+    scale_color_manual(values = c("Male" = "blue", "Female" = "red")) +
+    theme_minimal()
+  
+  # 3. Growth velocity curves
+  velocity_data <- growth_results$velocity
+  
+  plots$velocity <- ggplot(velocity_data, aes(x = age, y = velocity, color = sex)) +
+    geom_line(size = 1.5) +
+    geom_vline(data = growth_results$peak_velocity, 
+               aes(xintercept = age, color = sex), 
+               linetype = "dashed", alpha = 0.7) +
+    geom_text(data = growth_results$peak_velocity,
+              aes(x = age, y = peak_velocity, 
+                  label = paste0("Peak: ", round(peak_velocity, 1), " cm/yr")),
+              hjust = -0.1, vjust = -0.5, size = 3) +
+    labs(title = "Growth Velocity by Age and Sex",
+         subtitle = "Peak velocity marked with dashed lines",
+         x = "Age (years)", y = "Velocity (cm/year)") +
+    scale_color_manual(values = c("Male" = "blue", "Female" = "red")) +
+    theme_minimal() +
+    ylim(0, 12)
+  
+  # 4. Growth percentiles
+  perc_data <- growth_results$percentiles
+  
+  plots$percentiles <- ggplot(perc_data, aes(x = age, color = sex)) +
+    geom_ribbon(aes(ymin = p3, ymax = p97, fill = sex), alpha = 0.1) +
+    geom_ribbon(aes(ymin = p10, ymax = p90, fill = sex), alpha = 0.2) +
+    geom_ribbon(aes(ymin = p25, ymax = p75, fill = sex), alpha = 0.3) +
+    geom_line(aes(y = p50), size = 1) +
+    labs(title = "Growth Percentiles by Sex",
+         subtitle = "3rd-97th percentiles (outer), 10th-90th (middle), 25th-75th (inner)",
+         x = "Age (years)", y = "Height (cm)") +
+    scale_color_manual(values = c("Male" = "blue", "Female" = "red")) +
+    scale_fill_manual(values = c("Male" = "blue", "Female" = "red")) +
+    theme_minimal() +
+    facet_wrap(~ sex)
+  
+  # 5. Individual growth assessments
+  unusual_ids <- head(growth_results$unusual_growth$child_id, 6)
+  unusual_data <- growth_data %>% 
+    filter(child_id %in% unusual_ids) %>%
+    mutate(predicted = predict(growth_results$spline, newdata = ., re.form = NA))
+  
+  plots$unusual_growth <- ggplot(unusual_data, aes(x = age)) +
+    geom_point(aes(y = height), color = "black", size = 1.5) +
+    geom_line(aes(y = predicted), color = "red", size = 1) +
+    labs(title = "Unusual Growth Patterns",
+         subtitle = "Observed (black) vs Predicted (red) heights",
+         x = "Age (years)", y = "Height (cm)") +
+    facet_wrap(~ child_id, ncol = 3) +
+    theme_minimal()
+  
+  # Combine plots
+  combined_growth <- (plots$model_comparison | plots$growth_curves) /
+    (plots$velocity | plots$percentiles) /
+    plots$unusual_growth +
+    plot_layout(heights = c(1, 1, 1.5)) +
+    plot_annotation(
+      title = "Comprehensive Growth Curve Analysis",
+      subtitle = "Advanced modeling of longitudinal height data",
+      theme = theme(plot.title = element_text(size = 16, face = "bold"),
+                    plot.subtitle = element_text(size = 12))
+    )
+  
+  return(list(individual_plots = plots, combined_plot = combined_growth))
+}
+
+# Generate growth visualizations
+growth_viz <- create_growth_visualizations(growth_data, growth_models)
+
+# Display combined visualization
+print(growth_viz$combined_plot)
+```
+
+## 5. Biomarker Discovery: Longitudinal Omics Study
+
+### 5.1 High-Dimensional Biomarker Data Simulation
+
+```{r biomarker_simulation, echo=TRUE}
+# Comprehensive biomarker data simulation for omics studies
+simulate_biomarker_data <- function(
+  n_subjects = 100,
+  n_timepoints = 5,
+  n_biomarkers = 50,
+  n_disease_subtypes = 3,
+  treatment_effect = TRUE,
+  time_trends = TRUE,
+  biomarker_clusters = TRUE,
+  missing_data = TRUE,
+  batch_effects = FALSE
+) {
+  
+  # Create base data structure
+  biomarker_data <- expand.grid(
+    subject = factor(1:n_subjects),
+    time = seq(0, 12, length.out = n_timepoints),  # Months
+    biomarker = factor(paste0("BM", sprintf("%03d", 1:n_biomarkers)))
+  )
+  
+  # Add subject characteristics
+  subject_info <- data.frame(
+    subject = factor(1:n_subjects),
+    age = round(runif(n_subjects, 40, 75)),
+    sex = sample(c("Male", "Female"), n_subjects, replace = TRUE),
+    bmi = round(rnorm(n_subjects, 28, 4), 1),
+    disease_subtype = sample(paste0("Subtype", 1:n_disease_subtypes), 
+                             n_subjects, replace = TRUE)
+  )
+  
+  # Add treatment if specified
+  if (treatment_effect) {
+    subject_info$treatment <- sample(c("Placebo", "DrugA", "DrugB"), 
+                                     n_subjects, replace = TRUE)
+  }
+  
+  # Merge with biomarker data
+  biomarker_data <- merge(biomarker_data, subject_info, by = "subject")
+  
+  # Generate biomarker clusters if specified
+  if (biomarker_clusters) {
+    # Define 5 biomarker clusters with different patterns
+    n_clusters <- 5
+    cluster_assignment <- sample(1:n_clusters, n_biomarkers, replace = TRUE, 
+                                 prob = c(0.3, 0.25, 0.2, 0.15, 0.1))
+    names(cluster_assignment) <- paste0("BM", sprintf("%03d", 1:n_biomarkers))
+    
+    biomarker_data$cluster <- cluster_assignment[as.character(biomarker_data$biomarker)]
+  }
+  
+  # Generate true biomarker values
+  set.seed(123)
+  
+  # Baseline values by biomarker
+  baseline_means <- rnorm(n_biomarkers, 0, 1)
+  baseline_sds <- abs(rnorm(n_biomarkers, 0.5, 0.2))
+  
+  # Time trends by biomarker cluster
+  time_effects <- matrix(0, nrow = n_biomarkers, ncol = 2)
+  if (time_trends) {
+    for (cl in 1:n_clusters) {
+      idx <- which(cluster_assignment == cl)
+      if (cl == 1) {  # Decreasing over time
+        time_effects[idx, 1] <- rnorm(length(idx), -0.1, 0.05)
+        time_effects[idx, 2] <- rnorm(length(idx), -0.02, 0.01)
+      } else if (cl == 2) {  # Increasing over time
+        time_effects[idx, 1] <- rnorm(length(idx), 0.1, 0.05)
+        time_effects[idx, 2] <- rnorm(length(idx), 0.02, 0.01)
+      } else if (cl == 3) {  # Quadratic (U-shaped)
+        time_effects[idx, 1] <- rnorm(length(idx), 0, 0.05)
+        time_effects[idx, 2] <- rnorm(length(idx), 0.05, 0.01)
+      } else if (cl == 4) {  # Inverted U-shaped
+        time_effects[idx, 1] <- rnorm(length(idx), 0, 0.05)
+        time_effects[idx, 2] <- rnorm(length(idx), -0.05, 0.01)
+      } else {  # No time trend
+        time_effects[idx, ] <- 0
+      }
+    }
+  }
+  
+  # Disease subtype effects
+  subtype_effects <- matrix(rnorm(n_biomarkers * n_disease_subtypes, 0, 0.5), 
+                           nrow = n_biomarkers, ncol = n_disease_subtypes)
+  
+  # Treatment effects if specified
+  if (treatment_effect) {
+    treatment_effects <- matrix(rnorm(n_biomarkers * 2, 0, 0.3),  # 2 active treatments
+                               nrow = n_biomarkers, ncol = 2)
+  }
+  
+  # Generate values for each observation
+  biomarker_data$true_value <- NA_real_
+  
+  for (i in 1:nrow(biomarker_data)) {
+    bm <- as.character(biomarker_data$biomarker[i])
+    bm_idx <- which(levels(biomarker_data$biomarker) == bm)
+    sub <- biomarker_data$subject[i]
+    t <- biomarker_data$time[i]
+    subtype <- biomarker_data$disease_subtype[i]
+    subtype_idx <- as.numeric(gsub("Subtype", "", subtype))
+    
+    # Baseline
+    value <- baseline_means[bm_idx] + rnorm(1, 0, baseline_sds[bm_idx])
+    
+    # Time effect
+    if (time_trends) {
+      value <- value + time_effects[bm_idx, 1] * t + time_effects[bm_idx, 2] * t^2
+    }
+    
+    # Disease subtype effect
+    value <- value + subtype_effects[bm_idx, subtype_idx]
+    
+    # Treatment effect
+    if (treatment_effect) {
+      treatment <- biomarker_data$treatment[i]
+      if (treatment == "DrugA") {
+        value <- value + treatment_effects[bm_idx, 1]
+      } else if (treatment == "DrugB") {
+        value <- value + treatment_effects[bm_idx, 2]
+      }
+      # Time-treatment interaction
+      if (treatment != "Placebo") {
+        value <- value + 0.01 * t * rnorm(1, 0.5, 0.2)
+      }
+    }
+    
+    # Age effect
+    value <- value + 0.01 * (biomarker_data$age[i] - 60)
+    
+    # Sex effect
+    if (biomarker_data$sex[i] == "Male") {
+      value <- value + rnorm(1, 0.1, 0.05)
+    }
+    
+    biomarker_data$true_value[i] <- value
+  }
+  
+  # Add measurement error (larger for some biomarkers)
+  biomarker_data$measurement_error <- rep(abs(rnorm(n_biomarkers, 0.2, 0.1)), 
+                                         each = n_subjects * n_timepoints)
+  biomarker_data$observed_value <- biomarker_data$true_value + 
+    rnorm(nrow(biomarker_data), 0, biomarker_data$measurement_error)
+  
+  # Add batch effects if specified
+  if (batch_effects) {
+    n_batches <- 4
+    batch_assignment <- sample(1:n_batches, n_subjects, replace = TRUE)
+    batch_effects <- rnorm(n_batches, 0, 0.3)
+    
+    biomarker_data$batch <- batch_assignment[as.numeric(biomarker_data$subject)]
+    biomarker_data$batch_effect <- batch_effects[biomarker_data$batch]
+    biomarker_data$observed_value <- biomarker_data$observed_value + 
+      biomarker_data$batch_effect
+  }
+  
+  # Add missing data if specified
+  if (missing_data) {
+    # Missingness depends on biomarker type and time
+    biomarker_data$missing_prob <- plogis(
+      0.5 * (biomarker_data$time > median(biomarker_data$time)) -
+        0.3 * scale(biomarker_data$observed_value) +
+        ifelse(biomarker_data$cluster %in% c(1, 3), 0.2, -0.2)
+    )
+    
+    biomarker_data$missing <- rbinom(nrow(biomarker_data), 1, 
+                                     biomarker_data$missing_prob)
+    biomarker_data$value <- ifelse(biomarker_data$missing == 0, 
+                                   biomarker_data$observed_value, NA)
+  } else {
+    biomarker_data$value <- biomarker_data$observed_value
+  }
+  
+  # Standardize values for analysis
+  biomarker_data <- biomarker_data %>%
+    group_by(biomarker) %>%
+    mutate(value_scaled = scale(value)) %>%
+    ungroup()
+  
+  # Create wide format for some analyses
+  wide_data <- biomarker_data %>%
+    select(subject, time, biomarker, value_scaled) %>%
+    pivot_wider(names_from = biomarker, values_from = value_scaled)
+  
+  # Store metadata
+  metadata <- list(
+    n_subjects = n_subjects,
+    n_timepoints = n_timepoints,
+    n_biomarkers = n_biomarkers,
+    n_disease_subtypes = n_disease_subtypes,
+    biomarker_clusters = ifelse(biomarker_clusters, cluster_assignment, NA),
+    baseline_means = baseline_means,
+    time_effects = time_effects,
+    subtype_effects = subtype_effects,
+    treatment_effects = if(treatment_effect) treatment_effects else NA
+  )
+  
+  return(list(
+    long_data = biomarker_data,
+    wide_data = wide_data,
+    metadata = metadata
+  ))
+}
+
+# Generate comprehensive biomarker dataset
+set.seed(123)
+biomarker_study <- simulate_biomarker_data(
+  n_subjects = 80,
+  n_timepoints = 6,
+  n_biomarkers = 50,
+  n_disease_subtypes = 3,
+  treatment_effect = TRUE,
+  time_trends = TRUE,
+  biomarker_clusters = TRUE,
+  missing_data = TRUE,
+  batch_effects = TRUE
+)
+
+# Preview the data
+cat("Biomarker Study Data Structure:\n")
+cat("Long format dimensions:", dim(biomarker_study$long_data), "\n")
+cat("Wide format dimensions:", dim(biomarker_study$wide_data), "\n")
+cat("\nFirst few observations:\n")
+print(head(biomarker_study$long_data, 10))
+
+# Summary statistics
+cat("\nSummary statistics by cluster:\n")
+summary_stats <- biomarker_study$long_data %>%
+  filter(!is.na(value)) %>%
+  group_by(cluster, time) %>%
+  summarise(
+    n = n(),
+    mean = mean(value, na.rm = TRUE),
+    sd = sd(value, na.rm = TRUE),
+    missing = mean(is.na(value)),
+    .groups = "drop"
+  )
+
+print(summary_stats)
+```
+
+### 5.2 Multi-Level Biomarker Analysis
+
+```{r biomarker_analysis, echo=TRUE}
+# Comprehensive biomarker analysis pipeline
+analyze_biomarkers <- function(biomarker_study, 
+                               target_biomarkers = NULL,
+                               n_top_biomarkers = 10) {
+  
+  results <- list()
+  long_data <- biomarker_study$long_data
+  wide_data <- biomarker_study$wide_data
+  
+  # If target biomarkers not specified, select based on variance
+  if (is.null(target_biomarkers)) {
+    biomarker_variance <- long_data %>%
+      filter(!is.na(value)) %>%
+      group_by(biomarker) %>%
+      summarise(variance = var(value, na.rm = TRUE)) %>%
+      arrange(desc(variance))
+    
+    target_biomarkers <- head(biomarker_variance$biomarker, n_top_biomarkers)
+  }
+  
+  results$selected_biomarkers <- target_biomarkers
+  
+  # 1. Univariate analysis for each biomarker
+  cat("=== UNIVARIATE BIOMARKER ANALYSIS ===\n")
+  
+  univariate_results <- list()
+  
+  for (bm in target_biomarkers) {
+    cat("\nAnalyzing biomarker:", bm, "\n")
+    
+    # Filter data for this biomarker
+    bm_data <- long_data %>% 
+      filter(biomarker == bm, !is.na(value))
+    
+    # Fit random coefficient model
+    formula <- as.formula("value ~ time * treatment + disease_subtype + age + sex + (1 + time | subject)")
+    model <- tryCatch({
+      lmer(formula, data = bm_data, REML = TRUE)
+    }, error = function(e) {
+      cat("Model failed for", bm, ":", e$message, "\n")
+      return(NULL)
+    })
+    
+    if (!is.null(model)) {
+      univariate_results[[bm]] <- list(
+        model = model,
+        summary = summary(model),
+        effects = fixef(model),
+        variance = VarCorr(model),
+        performance = performance(model)
+      )
+    }
+  }
+  
+  results$univariate <- univariate_results
+  
+  # 2. Multivariate analysis using PCA on trajectory features
+  cat("\n=== MULTIVARIATE ANALYSIS: TRAJECTORY FEATURES ===\n")
+  
+  # Extract trajectory features for each subject-biomarker combination
+  trajectory_features <- long_data %>%
+    filter(biomarker %in% target_biomarkers, !is.na(value)) %>%
+    group_by(subject, biomarker) %>%
+    summarise(
+      baseline = first(value[order(time)]),
+      slope = if(n() > 1) {
+        coef(lm(value ~ time))[2]
+      } else NA,
+      curvature = if(n() > 2) {
+        coef(lm(value ~ poly(time, 2)))[3]
+      } else NA,
+      variability = sd(value),
+      auc = sum(value * c(diff(time), 0), na.rm = TRUE),
+      .groups = "drop"
+    ) %>%
+    pivot_wider(names_from = biomarker, 
+                values_from = c(baseline, slope, curvature, variability, auc),
+                names_sep = "_")
+  
+  # Perform PCA on trajectory features
+  pca_data <- trajectory_features %>%
+    select(where(is.numeric)) %>%
+    scale()
+  
+  pca_result <- prcomp(pca_data, center = TRUE, scale = TRUE)
+  
+  cat("PCA Summary (first 5 components):\n")
+  print(summary(pca_result)$importance[, 1:5])
+  
+  results$pca <- list(
+    pca_result = pca_result,
+    variance_explained = summary(pca_result)$importance[2, ],
+    loadings = pca_result$rotation,
+    scores = pca_result$x
+  )
+  
+  # 3. Mixed model for all biomarkers (simplified)
+  cat("\n=== MIXED MODEL FOR ALL BIOMARKERS ===\n")
+  
+  # Create a stacked dataset for multivariate mixed model
+  stacked_data <- long_data %>%
+    filter(biomarker %in% target_biomarkers[1:5]) %>%  # Limit for computation
+    mutate(biomarker = factor(biomarker))
+  
+  # Fit multivariate random coefficient model
+  # Note: This is computationally intensive for many biomarkers
+  formula_multi <- as.formula("value ~ time * treatment + disease_subtype + biomarker + 
+                              (1 + time | subject) + (1 | subject:biomarker)")
+  
+  multi_model <- lmer(formula_multi, data = stacked_data, REML = TRUE)
+  
+  cat("Multivariate Model Summary:\n")
+  print(summary(multi_model))
+  
+  results$multivariate <- multi_model
+  
+  # 4. Biomarker clustering based on trajectories
+  cat("\n=== BIOMARKER CLUSTERING ===\n")
+  
+  # Calculate correlation matrix of biomarker trajectories
+  bm_matrix <- long_data %>%
+    filter(biomarker %in% target_biomarkers, !is.na(value)) %>%
+    group_by(biomarker, time) %>%
+    summarise(mean_value = mean(value, na.rm = TRUE), .groups = "drop") %>%
+    pivot_wider(names_from = time, values_from = mean_value) %>%
+    column_to_rownames("biomarker") %>%
+    as.matrix()
+  
+  # Hierarchical clustering
+  bm_dist <- dist(bm_matrix)
+  bm_hclust <- hclust(bm_dist, method = "ward.D2")
+  
+  # Cut tree to get clusters
+  n_clusters <- 4
+  bm_clusters <- cutree(bm_hclust, k = n_clusters)
+  
+  results$clustering <- list(
+    distance_matrix = bm_dist,
+    hclust = bm_hclust,
+    clusters = bm_clusters,
+    n_clusters = n_clusters
+  )
+  
+  # 5. Treatment response prediction
+  cat("\n=== TREATMENT RESPONSE PREDICTION ===\n")
+  
+  # Create features for prediction
+  prediction_data <- long_data %>%
+    filter(biomarker %in% target_biomarkers[1:10], !is.na(value)) %>%
+    group_by(subject, biomarker, treatment, disease_subtype) %>%
+    summarise(
+      baseline = first(value[order(time)]),
+      final = last(value[order(time)]),
+      change = final - baseline,
+      slope = if(n() > 1) coef(lm(value ~ time))[2] else NA,
+      .groups = "drop"
+    ) %>%
+    pivot_wider(names_from = biomarker, 
+                values_from = c(baseline, final, change, slope),
+                names_sep = "_")
+  
+  # Add subject characteristics
+  subject_chars <- long_data %>%
+    select(subject, age, sex, bmi) %>%
+    distinct()
+  
+  prediction_data <- merge(prediction_data, subject_chars, by = "subject")
+  
+  # Define response (e.g., overall improvement)
+  prediction_data$response <- rowMeans(
+    prediction_data %>% select(starts_with("change_")), 
+    na.rm = TRUE
+  )
+  
+  # Split into training and testing
+  set.seed(123)
+  train_idx <- sample(1:nrow(prediction_data), 0.7 * nrow(prediction_data))
+  train_data <- prediction_data[train_idx, ]
+  test_data <- prediction_data[-train_idx, ]
+  
+  # Fit random forest for response prediction
+  rf_formula <- as.formula(paste("response ~", 
+                                 paste(grep("baseline_|slope_|age|sex|bmi|disease_subtype|treatment", 
+                                           names(train_data), value = TRUE), 
+                                       collapse = " + ")))
+  
+  rf_model <- ranger(rf_formula, 
+                     data = train_data,
+                     importance = "permutation",
+                     num.trees = 500,
+                     mtry = floor(sqrt(ncol(train_data) - 1)))
+  
+  # Predict on test data
+  test_data$predicted <- predict(rf_model, data = test_data)$predictions
+  
+  # Calculate performance
+  prediction_metrics <- data.frame(
+    rmse = sqrt(mean((test_data$response - test_data$predicted)^2)),
+    mae = mean(abs(test_data$response - test_data$predicted)),
+    r2 = cor(test_data$response, test_data$predicted)^2
+  )
+  
+  cat("Prediction Performance:\n")
+  print(prediction_metrics)
+  
+  results$prediction <- list(
+    rf_model = rf_model,
+    importance = importance(rf_model),
+    test_predictions = test_data,
+    metrics = prediction_metrics
+  )
+  
+  # 6. Longitudinal biomarker signature discovery
+  cat("\n=== BIOMARKER SIGNATURE DISCOVERY ===\n")
+  
+  # Use mixed model to identify biomarkers with significant treatment effects
+  signature_results <- data.frame(
+    biomarker = character(),
+    treatment_effect = numeric(),
+    time_interaction = numeric(),
+    p_value = numeric(),
+    fdr = numeric()
+  )
+  
+  for (bm in target_biomarkers) {
+    if (!is.null(univariate_results[[bm]])) {
+      model <- univariate_results[[bm]]$model
+      summ <- summary(model)
+      
+      # Extract treatment effects
+      coefs <- summ$coefficients
+      treatment_coef <- if("treatmentDrugA" %in% rownames(coefs)) {
+        coefs["treatmentDrugA", "Estimate"]
+      } else NA
+      
+      time_treatment_coef <- if("time:treatmentDrugA" %in% rownames(coefs)) {
+        coefs["time:treatmentDrugA", "Estimate"]
+      } else NA
+      
+      p_val <- if("treatmentDrugA" %in% rownames(coefs)) {
+        coefs["treatmentDrugA", "Pr(>|t|)"]
+      } else NA
+      
+      signature_results <- rbind(signature_results, data.frame(
+        biomarker = bm,
+        treatment_effect = treatment_coef,
+        time_interaction = time_treatment_coef,
+        p_value = p_val
+      ))
+    }
+  }
+  
+  # Adjust for multiple testing
+  signature_results$fdr <- p.adjust(signature_results$p_value, method = "fdr")
+  signature_results$significant <- signature_results$fdr < 0.05
+  
+  cat("Significant biomarkers (FDR < 0.05):", 
+      sum(signature_results$significant, na.rm = TRUE), "\n")
+  
+  results$signature <- signature_results
+  
+  # 7. Network analysis of biomarker correlations
+  cat("\n=== BIOMARKER NETWORK ANALYSIS ===\n")
+  
+  # Calculate correlation network
+  bm_cor <- long_data %>%
+    filter(biomarker %in% target_biomarkers, !is.na(value)) %>%
+    select(subject, time, biomarker, value) %>%
+    pivot_wider(names_from = biomarker, values_from = value) %>%
+    select(-subject, -time) %>%
+    cor(use = "pairwise.complete.obs")
+  
+  # Identify strong correlations
+  bm_cor_adj <- bm_cor
+  diag(bm_cor_adj) <- 0
+  bm_cor_adj[abs(bm_cor_adj) < 0.3] <- 0  # Threshold
+  
+  results$network <- list(
+    correlation_matrix = bm_cor,
+    adjacency_matrix = bm_cor_adj,
+    degree = colSums(abs(bm_cor_adj) > 0)
+  )
+  
+  return(results)
+}
+
+# Run comprehensive biomarker analysis
+biomarker_analysis <- analyze_biomarkers(
+  biomarker_study,
+  n_top_biomarkers = 20
+)
+
+# Generate biomarker analysis report
+generate_biomarker_report <- function(analysis_results) {
+  cat("=" * 70, "\n")
+  cat("BIOMARKER DISCOVERY ANALYSIS REPORT\n")
+  cat("=" * 70, "\n\n")
+  
+  # Summary statistics
+  cat("ANALYSIS OVERVIEW:\n")
+  cat("-" * 40, "\n")
+  cat("Number of biomarkers analyzed:", length(analysis_results$selected_biomarkers), "\n")
+  cat("Number of univariate models:", length(analysis_results$univariate), "\n")
+  
+  # Significant biomarkers
+  sig_biomarkers <- analysis_results$signature %>%
+    filter(significant) %>%
+    arrange(fdr)
+  
+  cat("\nSIGNIFICANT BIOMARKERS (FDR < 0.05):\n")
+  cat("-" * 40, "\n")
+  if (nrow(sig_biomarkers) > 0) {
+    print(sig_biomarkers)
+  } else {
+    cat("No significant biomarkers found\n")
+  }
+  
+  # Prediction performance
+  cat("\nTREATMENT RESPONSE PREDICTION:\n")
+  cat("-" * 40, "\n")
+  print(analysis_results$prediction$metrics)
+  
+  # Clustering results
+  cat("\nBIOMARKER CLUSTERING:\n")
+  cat("-" * 40, "\n")
+  cluster_summary <- table(analysis_results$clustering$clusters)
+  cat("Cluster sizes:\n")
+  print(cluster_summary)
+  
+  # PCA results
+  cat("\nPRINCIPAL COMPONENT ANALYSIS:\n")
+  cat("-" * 40, "\n")
+  var_explained <- analysis_results$pca$variance_explained[1:5]
+  cat("Variance explained by first 5 PCs:\n")
+  print(round(var_explained * 100, 1))
+  cat("Cumulative variance:", 
+      round(sum(var_explained) * 100, 1), "%\n")
+  
+  # Network analysis
+  cat("\nBIOMARKER NETWORK:\n")
+  cat("-" * 40, "\n")
+  network_stats <- data.frame(
+    n_biomarkers = nrow(analysis_results$network$adjacency_matrix),
+    n_edges = sum(analysis_results$network$adjacency_matrix != 0) / 2,
+    mean_degree = mean(analysis_results$network$degree),
+    max_degree = max(analysis_results$network$degree)
+  )
+  print(network_stats)
+}
+
+generate_biomarker_report(biomarker_analysis)
+```
+
+### 5.3 Advanced Biomarker Visualizations
+
+```{r biomarker_viz, echo=TRUE, fig.height=12}
+# Create comprehensive biomarker visualizations
+create_biomarker_visualizations <- function(biomarker_study, analysis_results) {
+  
+  plots <- list()
+  long_data <- biomarker_study$long_data
+  target_biomarkers <- analysis_results$selected_biomarkers
+  
+  # 1. Biomarker trajectories by cluster
+  trajectory_data <- long_data %>%
+    filter(biomarker %in% target_biomarkers[1:12], !is.na(value)) %>%
+    group_by(biomarker, time, cluster) %>%
+    summarise(
+      mean_value = mean(value, na.rm = TRUE),
+      se = sd(value, na.rm = TRUE) / sqrt(n()),
+      .groups = "drop"
+    )
+  
+  plots$trajectories <- ggplot(trajectory_data, aes(x = time, y = mean_value, 
+                                                    color = factor(cluster))) +
+    geom_line(size = 1) +
+    geom_ribbon(aes(ymin = mean_value - 1.96*se, ymax = mean_value + 1.96*se, 
+                    fill = factor(cluster)), alpha = 0.2) +
+    labs(title = "Biomarker Trajectories by Cluster",
+         subtitle = "Mean ± 95% confidence intervals",
+         x = "Time (months)", y = "Standardized Value") +
+    scale_color_brewer(palette = "Set1") +
+    scale_fill_brewer(palette = "Set1") +
+    facet_wrap(~ biomarker, scales = "free_y", ncol = 4) +
+    theme_minimal() +
+    theme(legend.position = "bottom")
+  
+  # 2. Treatment effects heatmap
+  sig_data <- analysis_results$signature %>%
+    filter(!is.na(treatment_effect)) %>%
+    mutate(significance = ifelse(significant, "Significant", "Not Significant"))
+  
+  plots$heatmap <- ggplot(sig_data, aes(x = reorder(biomarker, treatment_effect), 
+                                        y = "Treatment Effect", 
+                                        fill = treatment_effect)) +
+    geom_tile() +
+    geom_point(data = sig_data[sig_data$significant, ], 
+               aes(shape = significance), size = 2) +
+    scale_fill_gradient2(low = "blue", mid = "white", high = "red",
+                         midpoint = 0) +
+    scale_shape_manual(values = c("Significant" = 8)) +
+    labs(title = "Treatment Effects Across Biomarkers",
+         subtitle = "Red: increased with treatment, Blue: decreased",
+         x = "Biomarker", y = "") +
+    theme_minimal() +
+    theme(axis.text.x = element_text(angle = 45, hjust = 1),
+          legend.position = "right")
+  
+  # 3. PCA biplot
+  pca_scores <- as.data.frame(analysis_results$pca$scores[, 1:2])
+  pca_loadings <- as.data.frame(analysis_results$pca$loadings[, 1:2])
+  
+  # Sample for clarity
+  set.seed(123)
+  sample_idx <- sample(1:nrow(pca_scores), min(100, nrow(pca_scores)))
+  
+  plots$pca <- ggplot() +
+    geom_point(data = pca_scores[sample_idx, ], 
+               aes(x = PC1, y = PC2), alpha = 0.5, size = 1) +
+    geom_segment(data = pca_loadings[1:10, ],  # Top 10 loadings
+                 aes(x = 0, y = 0, xend = PC1*5, yend = PC2*5),
+                 arrow = arrow(length = unit(0.2, "cm")), color = "red") +
+    geom_text(data = pca_loadings[1:10, ],
+              aes(x = PC1*5.2, y = PC2*5.2, label = rownames(pca_loadings)[1:10]),
+              size = 3, color = "red") +
+    labs(title = "PCA Biplot of Biomarker Trajectory Features",
+         subtitle = "Red arrows show biomarker contributions",
+         x = paste0("PC1 (", round(analysis_results$pca$variance_explained[1]*100, 1), "%)"),
+         y = paste0("PC2 (", round(analysis_results$pca$variance_explained[2]*100, 1), "%)")) +
+    theme_minimal()
+  
+  # 4. Biomarker clustering dendrogram
+  hc <- analysis_results$clustering$hclust
+  dendro_data <- as.dendrogram(hc)
+  dendro_segments <- as.ggdend(dendro_data)$segments
+  
+  plots$dendrogram <- ggplot() +
+    geom_segment(data = dendro_segments, 
+                 aes(x = x, y = y, xend = xend, yend = yend)) +
+    labs(title = "Biomarker Clustering Dendrogram",
+         subtitle = "Hierarchical clustering of biomarker trajectories",
+         x = "Biomarker", y = "Distance") +
+    theme_minimal() +
+    theme(axis.text.x = element_blank(),
+          axis.ticks.x = element_blank())
+  
+  # 5. Prediction performance
+  pred_data <- analysis_results$prediction$test_predictions
+  
+  plots$prediction <- ggplot(pred_data, aes(x = response, y = predicted)) +
+    geom_point(alpha = 0.6, size = 2) +
+    geom_abline(slope = 1, intercept = 0, color = "red", linetype = "dashed") +
+    geom_smooth(method = "lm", se = FALSE, color = "blue") +
+    labs(title = "Treatment Response Prediction",
+         subtitle = paste0("R² = ", round(cor(pred_data$response, pred_data$predicted)^2, 3)),
+         x = "Actual Response", y = "Predicted Response") +
+    theme_minimal()
+  
+  # 6. Biomarker network
+  adj_matrix <- analysis_results$network$adjacency_matrix
+  degree <- analysis_results$network$degree
+  
+  # Create network plot data
+  network_data <- as.data.frame(which(adj_matrix != 0, arr.ind = TRUE))
+  network_data$weight <- adj_matrix[cbind(network_data$row, network_data$col)]
+  
+  # Keep only strong connections for clarity
+  network_data <- network_data %>% filter(abs(weight) > 0.5)
+  
+  node_data <- data.frame(
+    biomarker = colnames(adj_matrix),
+    degree = degree,
+    cluster = analysis_results$clustering$clusters[colnames(adj_matrix)]
+  )
+  
+  plots$network <- ggplot() +
+    geom_segment(data = network_data,
+                 aes(x = row, xend = col, 
+                     y = 1, yend = 1,
+                     color = weight, alpha = abs(weight)),
+                 linewidth = 0.5) +
+    geom_point(data = node_data,
+               aes(x = as.numeric(factor(biomarker)), y = 1, 
+                   size = degree, fill = factor(cluster)),
+               shape = 21, color = "black") +
+    scale_color_gradient2(low = "blue", mid = "gray", high = "red",
+                          midpoint = 0) +
+    scale_size(range = c(2, 8)) +
+    scale_fill_brewer(palette = "Set1") +
+    labs(title = "Biomarker Correlation Network",
+         subtitle = "Node size = degree, Color = correlation direction",
+         x = "", y = "") +
+    theme_minimal() +
+    theme(axis.text = element_blank(),
+          axis.ticks = element_blank(),
+          panel.grid = element_blank())
+  
+  # Combine all plots
+  combined_biomarker <- (plots$trajectories) /
+    (plots$heatmap | plots$pca) /
+    (plots$dendrogram | plots$prediction) /
+    plots$network +
+    plot_layout(heights = c(2, 1, 1, 1)) +
+    plot_annotation(
+      title = "Comprehensive Biomarker Discovery Analysis",
+      subtitle = "Multi-dimensional visualization of longitudinal biomarker data",
+      theme = theme(plot.title = element_text(size = 16, face = "bold"),
+                    plot.subtitle = element_text(size = 12))
+    )
+  
+  return(list(individual_plots = plots, combined_plot = combined_biomarker))
+}
+
+# Generate biomarker visualizations
+biomarker_viz <- create_biomarker_visualizations(biomarker_study, biomarker_analysis)
+
+# Display combined visualization
+print(biomarker_viz$combined_plot)
+```
+
+## 6. Advanced Topics and Extensions
+
+### 6.1 Bayesian Random Coefficient Models
+
+```{r bayesian_models, echo=TRUE, eval=FALSE}
+# Bayesian implementation using brms (commented out for speed)
+run_bayesian_analysis <- function(data) {
+  
+  library(brms)
+  
+  # Simple Bayesian random coefficient model
+  bform <- bf(
+    outcome_observed ~ time * treatment + (1 + time | subject),
+    sigma ~ 1
+  )
+  
+  # Set priors
+  priors <- c(
+    prior(normal(0, 10), class = "Intercept"),
+    prior(normal(0, 5), class = "b"),
+    prior(lkj(2), class = "cor"),
+    prior(exponential(1), class = "sd")
+  )
+  
+  # Fit model (this can take time)
+  bmodel <- brm(
+    bform,
+    data = data,
+    prior = priors,
+    chains = 4,
+    iter = 2000,
+    warmup = 1000,
+    cores = 4,
+    seed = 12345,
+    control = list(adapt_delta = 0.95)
+  )
+  
+  return(bmodel)
+}
+
+# Uncomment to run (computationally intensive)
+# bayesian_model <- run_bayesian_analysis(sim_data)
+```
+
+### 6.2 Machine Learning Integration
+
+```{r ml_integration, echo=TRUE}
+# Machine learning approaches for random coefficient models
+ml_random_coefficients <- function(data, outcome_var = "outcome_observed") {
+  
+  results <- list()
+  
+  # 1. Random forest with lagged features
+  rf_data <- data %>%
+    arrange(subject, time) %>%
+    group_by(subject) %>%
+    mutate(
+      lag1 = dplyr::lag(.data[[outcome_var]], 1),
+      lag2 = dplyr::lag(.data[[outcome_var]], 2),
+      rolling_mean = zoo::rollmean(.data[[outcome_var]], 3, fill = NA, align = "right")
+    ) %>%
+    ungroup() %>%
+    filter(!is.na(lag1), !is.na(lag2))
+  
+  # Train-test split
+  set.seed(123)
+  train_idx <- sample(1:nrow(rf_data), 0.7 * nrow(rf_data))
+  train_data <- rf_data[train_idx, ]
+  test_data <- rf_data[-train_idx, ]
+  
+  # Random forest model
+  rf_formula <- as.formula(paste(outcome_var, "~ time + treatment + lag1 + lag2 + rolling_mean"))
+  
+  rf_model <- ranger(
+    rf_formula,
+    data = train_data,
+    importance = "permutation",
+    num.trees = 500,
+    mtry = 3
+  )
+  
+  # Predictions
+  test_data$rf_pred <- predict(rf_model, data = test_data)$predictions
+  
+  results$random_forest <- list(
+    model = rf_model,
+    predictions = test_data,
+    rmse = sqrt(mean((test_data[[outcome_var]] - test_data$rf_pred)^2)),
+    importance = importance(rf_model)
+  )
+  
+  # 2. Gradient boosting with time series features
+  library(xgboost)
+  
+  # Prepare data for XGBoost
+  xgb_data <- model.matrix(~ time + treatment + lag1 + lag2 - 1, data = rf_data)
+  y <- rf_data[[outcome_var]]
+  
+  dtrain <- xgb.DMatrix(data = xgb_data[train_idx, ], label = y[train_idx])
+  dtest <- xgb.DMatrix(data = xgb_data[-train_idx, ], label = y[-train_idx])
+  
+  # XGBoost parameters
+  params <- list(
+    objective = "reg:squarederror",
+    eta = 0.1,
+    max_depth = 6,
+    min_child_weight = 1,
+    subsample = 0.8,
+    colsample_bytree = 0.8
+  )
+  
+  xgb_model <- xgb.train(
+    params = params,
+    data = dtrain,
+    nrounds = 100,
+    watchlist = list(train = dtrain, test = dtest),
+    early_stopping_rounds = 10,
+    verbose = 0
+  )
+  
+  test_data$xgb_pred <- predict(xgb_model, dtest)
+  
+  results$xgboost <- list(
+    model = xgb_model,
+    predictions = test_data,
+    rmse = sqrt(mean((test_data[[outcome_var]] - test_data$xgb_pred)^2)),
+    importance = xgb.importance(model = xgb_model)
+  )
+  
+  # 3. Ensemble of mixed model and machine learning
+  # Fit mixed model
+  mixed_model <- lmer(as.formula(paste(outcome_var, "~ time * treatment + (1 + time | subject)")),
+                      data = data)
+  
+  test_data$mixed_pred <- predict(mixed_model, newdata = test_data, re.form = NA)
+  
+  # Create ensemble
+  test_data$ensemble_pred <- 0.5 * test_data$mixed_pred + 
+    0.25 * test_data$rf_pred + 0.25 * test_data$xgb_pred
+  
+  results$ensemble <- list(
+    mixed_model = mixed_model,
+    predictions = test_data,
+    rmse = sqrt(mean((test_data[[outcome_var]] - test_data$ensemble_pred)^2))
+  )
+  
+  # Compare all methods
+  comparison <- data.frame(
+    Method = c("Random Forest", "XGBoost", "Mixed Model", "Ensemble"),
+    RMSE = c(results$random_forest$rmse,
+             results$xgboost$rmse,
+             sqrt(mean((test_data[[outcome_var]] - test_data$mixed_pred)^2)),
+             results$ensemble$rmse),
+    MAE = c(
+      mean(abs(test_data[[outcome_var]] - test_data$rf_pred)),
+      mean(abs(test_data[[outcome_var]] - test_data$xgb_pred)),
+      mean(abs(test_data[[outcome_var]] - test_data$mixed_pred)),
+      mean(abs(test_data[[outcome_var]] - test_data$ensemble_pred))
+    ),
+    R2 = c(
+      cor(test_data[[outcome_var]], test_data$rf_pred)^2,
+      cor(test_data[[outcome_var]], test_data$xgb_pred)^2,
+      cor(test_data[[outcome_var]], test_data$mixed_pred)^2,
+      cor(test_data[[outcome_var]], test_data$ensemble_pred)^2
+    )
+  )
+  
+  cat("Machine Learning Method Comparison:\n")
+  print(comparison)
+  
+  results$comparison <- comparison
+  
+  return(results)
+}
+
+# Run ML integration analysis
+ml_results <- ml_random_coefficients(sim_data)
+
+# Visualize ML results
+create_ml_visualizations <- function(ml_results) {
+  
+  pred_data <- ml_results$ensemble$predictions
+  
+  p1 <- ggplot(pred_data, aes(x = outcome_observed)) +
+    geom_point(aes(y = rf_pred, color = "Random Forest"), alpha = 0.3) +
+    geom_point(aes(y = xgb_pred, color = "XGBoost"), alpha = 0.3) +
+    geom_point(aes(y = mixed_pred, color = "Mixed Model"), alpha = 0.3) +
+    geom_point(aes(y = ensemble_pred, color = "Ensemble"), alpha = 0.3) +
+    geom_abline(slope = 1, intercept = 0, linetype = "dashed") +
+    labs(title = "Prediction Comparison Across Methods",
+         x = "Observed", y = "Predicted") +
+    scale_color_manual(values = c("Random Forest" = "blue", 
+                                  "XGBoost" = "green",
+                                  "Mixed Model" = "red",
+                                  "Ensemble" = "purple")) +
+    theme_minimal() +
+    theme(legend.position = "bottom")
+  
+  # Feature importance from random forest
+  imp_data <- data.frame(
+    feature = names(ml_results$random_forest$importance),
+    importance = ml_results$random_forest$importance
+  ) %>%
+    arrange(desc(importance)) %>%
+    head(10)
+  
+  p2 <- ggplot(imp_data, aes(x = reorder(feature, importance), y = importance)) +
+    geom_bar(stat = "identity", fill = "steelblue", alpha = 0.7) +
+    coord_flip() +
+    labs(title = "Top 10 Important Features (Random Forest)",
+         x = "Feature", y = "Importance") +
+    theme_minimal()
+  
+  # Performance comparison
+  perf_data <- ml_results$comparison %>%
+    pivot_longer(cols = c(RMSE, MAE, R2), names_to = "metric", values_to = "value")
+  
+  p3 <- ggplot(perf_data, aes(x = Method, y = value, fill = Method)) +
+    geom_bar(stat = "identity", alpha = 0.7) +
+    facet_wrap(~ metric, scales = "free_y") +
+    labs(title = "Performance Metrics by Method") +
+    theme_minimal() +
+    theme(axis.text.x = element_text(angle = 45, hjust = 1),
+          legend.position = "none")
+  
+  combined_ml <- (p1 | p2) / p3 +
+    plot_layout(heights = c(1, 1)) +
+    plot_annotation(
+      title = "Machine Learning Integration with Random Coefficient Models",
+      theme = theme(plot.title = element_text(size = 14, face = "bold"))
+    )
+  
+  return(combined_ml)
+}
+
+# Generate ML visualizations
+ml_viz <- create_ml_visualizations(ml_results)
+print(ml_viz)
+```
+
+### 6.3 Power Analysis and Sample Size Calculation
+
+```{r power_analysis, echo=TRUE}
+# Comprehensive power analysis for random coefficient models
+power_analysis_random_coefficients <- function(
+  n_subjects_range = c(20, 50, 100, 200),
+  n_timepoints_range = c(3, 5, 7, 10),
+  effect_sizes = c(0.2, 0.5, 0.8),
+  alpha = 0.05,
+  n_simulations = 100
+) {
+  
+  power_results <- expand.grid(
+    n_subjects = n_subjects_range,
+    n_timepoints = n_timepoints_range,
+    effect_size = effect_sizes,
+    power = NA_real_
+  )
+  
+  # Simulation function
+  simulate_power <- function(n_subjects, n_timepoints, effect_size) {
+    
+    significant_count <- 0
+    
+    for (sim in 1:n_simulations) {
+      # Simulate data
+      sim_data <- simulate_rcm_data(
+        n_subjects = n_subjects,
+        n_times = n_timepoints,
+        fixed_effects = c(intercept = 50, time = 2, 
+                         treatment = effect_size * 5,  # Scale effect
+                         interaction = effect_size * 0.8),
+        random_variance = c(intercept = 9, slope = 0.5, corr = -0.3),
+        residual_sd = 3,
+        treatment_ratio = 0.5
+      )
+      
+      # Fit model
+      model <- tryCatch({
+        lmer(outcome_observed ~ time * treatment + (1 + time | subject),
+             data = sim_data)
+      }, error = function(e) NULL)
+      
+      if (!is.null(model)) {
+        # Test treatment effect
+        p_value <- summary(model)$coefficients["treatment1", "Pr(>|t|)"]
+        if (p_value < alpha) {
+          significant_count <- significant_count + 1
+        }
+      }
+    }
+    
+    return(significant_count / n_simulations)
+  }
+  
+  # Run simulations (this can take time)
+  cat("Running power simulations...\n")
+  for (i in 1:nrow(power_results)) {
+    cat(sprintf("Simulation %d/%d: n=%d, t=%d, d=%.1f\n", 
+                i, nrow(power_results),
+                power_results$n_subjects[i],
+                power_results$n_timepoints[i],
+                power_results$effect_size[i]))
+    
+    power_results$power[i] <- simulate_power(
+      power_results$n_subjects[i],
+      power_results$n_timepoints[i],
+      power_results$effect_size[i]
+    )
+  }
+  
+  # Create power curves
+  power_plot <- ggplot(power_results, aes(x = n_subjects, y = power, 
+                                          color = factor(effect_size),
+                                          linetype = factor(n_timepoints))) +
+    geom_line(size = 1.2) +
+    geom_point(size = 2) +
+    geom_hline(yintercept = 0.8, linetype = "dashed", color = "gray") +
+    geom_hline(yintercept = 0.9, linetype = "dashed", color = "darkgray") +
+    labs(title = "Power Analysis for Random Coefficient Models",
+         subtitle = "Power to detect treatment effect",
+         x = "Number of Subjects",
+         y = "Statistical Power",
+         color = "Effect Size (d)",
+         linetype = "Time Points") +
+    scale_color_brewer(palette = "Set1") +
+    theme_minimal() +
+    theme(legend.position = "bottom")
+  
+  # Create sample size table for 80% power
+  sample_size_table <- power_results %>%
+    filter(power >= 0.79 & power <= 0.81) %>%
+    group_by(effect_size, n_timepoints) %>%
+    summarise(
+      min_n = min(n_subjects),
+      .groups = "drop"
+    ) %>%
+    pivot_wider(names_from = n_timepoints, values_from = min_n)
+  
+  cat("\nSample Size for 80% Power:\n")
+  print(sample_size_table)
+  
+  # Interactive power calculator (simplified)
+  calculate_power <- function(n_subjects, n_timepoints, effect_size) {
+    # Approximation formula based on simulation results
+    base_power <- pnorm(
+      effect_size * sqrt(n_subjects * n_timepoints / 4) - qnorm(0.975)
+    )
+    
+    # Adjust for random effects
+    adjusted_power <- base_power * (1 - 0.1 / sqrt(n_timepoints))
+    
+    return(min(0.99, max(0.01, adjusted_power)))
+  }
+  
+  # Create shiny-like interface concept
+  power_calculator <- function() {
+    cat("\nPower Calculator for Random Coefficient Models:\n")
+    cat("Enter parameters:\n")
+    
+    n_subjects <- as.numeric(readline("Number of subjects: "))
+    n_timepoints <- as.numeric(readline("Number of time points: "))
+    effect_size <- as.numeric(readline("Effect size (Cohen's d): "))
+    
+    power <- calculate_power(n_subjects, n_timepoints, effect_size)
+    
+    cat(sprintf("\nEstimated Power: %.1f%%\n", power * 100))
+    
+    if (power < 0.8) {
+      cat("Recommendation: Increase sample size or number of time points\n")
+    } else {
+      cat("Recommendation: Design is adequately powered\n")
+    }
+  }
+  
+  return(list(
+    power_results = power_results,
+    power_plot = power_plot,
+    sample_size_table = sample_size_table,
+    power_calculator = power_calculator
+  ))
+}
+
+# Run power analysis (simplified for demonstration)
+power_analysis <- power_analysis_random_coefficients(
+  n_subjects_range = c(30, 50, 80),
+  n_timepoints_range = c(3, 5, 7),
+  effect_sizes = c(0.3, 0.5, 0.7),
+  n_simulations = 50  # Reduced for speed
+)
+
+# Display power plot
+print(power_analysis$power_plot)
+
+# Show sample size table
+print(power_analysis$sample_size_table)
+```
+
+## 7. Reproducibility and Reporting Framework
+
+```{r reproducibility, echo=TRUE}
+# Comprehensive reproducibility framework
+create_reproducibility_report <- function(analysis_objects, 
+                                          analysis_name = "Random Coefficient Analysis") {
+  
+  cat("=" * 70, "\n")
+  cat("REPRODUCIBILITY REPORT:", analysis_name, "\n")
+  cat("=" * 70, "\n\n")
+  
+  # 1. Session information
+  cat("1. SESSION INFORMATION:\n")
+  cat("-" * 40, "\n")
+  print(sessionInfo())
+  
+  # 2. Data summary
+  cat("\n2. DATA SUMMARY:\n")
+  cat("-" * 40, "\n")
+  
+  if ("data" %in% names(analysis_objects)) {
+    data_summary <- list(
+      n_observations = nrow(analysis_objects$data),
+      n_subjects = n_distinct(analysis_objects$data$subject),
+      n_timepoints = n_distinct(analysis_objects$data$time),
+      missing_percentage = mean(is.na(analysis_objects$data$outcome_observed)) * 100
+    )
+    print(data_summary)
+  }
+  
+  # 3. Model specifications
+  cat("\n3. MODEL SPECIFICATIONS:\n")
+  cat("-" * 40, "\n")
+  
+  if ("models" %in% names(analysis_objects)) {
+    for (model_name in names(analysis_objects$models)) {
+      cat(sprintf("\n%s:\n", model_name))
+      model <- analysis_objects$models[[model_name]]
+      if (inherits(model, "lmerMod")) {
+        cat("  Formula:", paste(deparse(formula(model)), collapse = "\n"), "\n")
+        cat("  Method:", ifelse(isREML(model), "REML", "ML"), "\n")
+        cat("  Random effects structure:\n")
+        print(VarCorr(model))
+      }
+    }
+  }
+  
+  # 4. Key results
+  cat("\n4. KEY RESULTS:\n")
+  cat("-" * 40, "\n")
+  
+  # Extract and summarize key findings
+  key_results <- list(
+    analysis_completed = Sys.time(),
+    total_models = ifelse("models" %in% names(analysis_objects), 
+                          length(analysis_objects$models), 0),
+    recommendations = ifelse("recommendations" %in% names(analysis_objects),
+                             analysis_objects$recommendations, 
+                             "No specific recommendations")
+  )
+  
+  print(key_results)
+  
+  # 5. File structure
+  cat("\n5. PROJECT FILE STRUCTURE:\n")
+  cat("-" * 40, "\n")
+  
+  project_files <- list.files(".", pattern = "\\.R$|\\.Rmd$|\\.rds$")
+  cat("Project files:\n")
+  print(project_files)
+  
+  # 6. Create reproducibility package
+  cat("\n6. CREATING REPRODUCIBILITY PACKAGE...\n")
+  
+  # Save all objects
+  save_file <- paste0("reproducibility_package_", 
+                      format(Sys.time(), "%Y%m%d_%H%M%S"), ".rds")
+  
+  saveRDS(analysis_objects, file = save_file)
+  cat("Saved analysis objects to:", save_file, "\n")
+  
+  # Create README file
+  readme_content <- paste(
+    "# Reproducibility Package",
+    "## Analysis:", analysis_name,
+    "## Date:", Sys.Date(),
+    "## Author:", Sys.info()["user"],
+    "",
+    "## Contents:",
+    "1. Data objects",
+    "2. Fitted models",
+    "3. Analysis results",
+    "4. Visualizations",
+    "",
+    "## To reproduce:",
+    "1. Load the RDS file: readRDS('", save_file, "')",
+    "2. Run the analysis script",
+    "3. Generate reports using included functions",
+    "",
+    sep = "\n"
+  )
+  
+  writeLines(readme_content, "README_reproducibility.md")
+  cat("Created README file: README_reproducibility.md\n")
+  
+  # 7. Create analysis report
+  cat("\n7. GENERATING ANALYSIS REPORT...\n")
+  
+  report_file <- paste0("analysis_report_", 
+                        format(Sys.time(), "%Y%m%d_%H%M%S"), ".html")
+  
+  # Create a simple HTML report
+  report_html <- paste(
+    "<!DOCTYPE html>",
+    "<html>",
+    "<head>",
+    "<title>Analysis Report: ", analysis_name, "</title>",
+    "<style>",
+    "body { font-family: Arial, sans-serif; margin: 40px; }",
+    "h1 { color: #2c3e50; }",
+    "h2 { color: #34495e; border-bottom: 2px solid #bdc3c7; }",
+    ".section { margin-bottom: 30px; }",
+    ".result { background-color: #f8f9fa; padding: 15px; border-radius: 5px; }",
+    "</style>",
+    "</head>",
+    "<body>",
+    "<h1>Analysis Report: ", analysis_name, "</h1>",
+    "<div class='section'>",
+    "<h2>Summary</h2>",
+    "<p>Analysis completed on ", Sys.time(), "</p>",
+    "</div>",
+    "<div class='section'>",
+    "<h2>Key Findings</h2>",
+    "<div class='result'>",
+    "<p>Total models: ", key_results$total_models, "</p>",
+    "<p>Recommendations: ", key_results$recommendations, "</p>",
+    "</div>",
+    "</div>",
+    "<div class='section'>",
+    "<h2>Reproducibility</h2>",
+    "<p>All analysis objects saved to: ", save_file, "</p>",
+    "<p>Session information recorded in RDS file</p>",
+    "</div>",
+    "</body>",
+    "</html>",
+    sep = "\n"
+  )
+  
+  writeLines(report_html, report_file)
+  cat("Created HTML report:", report_file, "\n")
+  
+  # 8. Create dockerfile for containerization
+  dockerfile_content <- paste(
+    "FROM rocker/tidyverse:4.2.0",
+    "WORKDIR /home/rstudio",
+    "COPY . .",
+    "RUN R -e \"install.packages(c('lme4', 'nlme', 'lmerTest', 'ggeffects',",
+    "                            'performance', 'MASS', 'mvtnorm', 'robustlmm',",
+    "                            'glmmTMB', 'geepack', 'brms', 'mgcv', 'ranger'),",
+    "                            dependencies = TRUE)\"",
+    "CMD [\"Rscript\", \"analysis_script.R\"]",
+    sep = "\n"
+  )
+  
+  writeLines(dockerfile_content, "Dockerfile")
+  cat("Created Dockerfile for containerization\n")
+  
+  cat("\n", "=" * 70, "\n")
+  cat("REPRODUCIBILITY PACKAGE CREATION COMPLETE\n")
+  cat("=" * 70, "\n")
+  
+  return(list(
+    save_file = save_file,
+    report_file = report_file,
+    readme_file = "README_reproducibility.md",
+    dockerfile = "Dockerfile"
+  ))
+}
+
+# Create example analysis objects for reproducibility
+example_analysis <- list(
+  data = sim_data,
+  models = list(
+    random_intercept = model_results$random_intercept,
+    random_intercept_slope = model_results$random_intercept_slope
+  ),
+  results = list(
+    model_comparison = model_results$model_comparison,
+    performance = model_results$performance
+  ),
+  recommendations = "Use random intercept + slope model for final analysis"
+)
+
+# Generate reproducibility report
+reproducibility_package <- create_reproducibility_report(
+  example_analysis,
+  "Random Coefficient Model Analysis"
+)
+```
+
+## 8. Conclusion and Best Practices
+
+```{r conclusion, echo=TRUE}
+# Final summary and best practices
+generate_final_report <- function() {
+  
+  cat("=" * 70, "\n")
+  cat("RANDOM COEFFICIENT REGRESSION MODELS: BEST PRACTICES\n")
+  cat("=" * 70, "\n\n")
+  
+  cat("SUMMARY OF KEY POINTS:\n")
+  cat("-" * 40, "\n")
+  
+  best_practices <- list(
+    "Model Specification" = c(
+      "1. Start with random intercept model, then add random slopes",
+      "2. Consider correlation between random intercepts and slopes",
+      "3. Center time variable to reduce correlation",
+      "4. Use polynomial or spline terms for nonlinear trajectories"
+    ),
+    
+    "Model Selection" = c(
+      "1. Use REML for comparing covariance structures",
+      "2. Use ML for comparing fixed effects",
+      "3. Consider AIC/BIC for model comparison",
+      "4. Use likelihood ratio tests for nested models",
+      "5. Account for boundary conditions in variance component tests"
+    ),
+    
+    "Diagnostics" = c(
+      "1. Check normality of residuals and random effects",
+      "2. Assess homogeneity of variance",
+      "3. Check for influential observations/subjects",
+      "4. Validate model assumptions with simulation",
+      "5. Use diagnostic plots for visual assessment"
+    ),
+    
+    "Inference" = c(
+      "1. Use Kenward-Roger or Satterthwaite degrees of freedom",
+      "2. Report confidence intervals for fixed effects",
+      "3. Include variance component estimates",
+      "4. Consider multiple testing correction for many comparisons",
+      "5. Use appropriate methods for small samples"
+    ),
+    
+    "Reporting" = c(
+      "1. Report model specification with formula",
+      "2. Include estimation method and software",
+      "3. Report all parameter estimates with uncertainty",
+      "4. Include model fit statistics (AIC, BIC, R²)",
+      "5. Provide diagnostic plots",
+      "6. Share analysis code for reproducibility"
+    ),
+    
+    "Advanced Topics" = c(
+      "1. Consider Bayesian approaches for small samples",
+      "2. Use multiple imputation for missing data",
+      "3. Implement cross-validation for model validation",
+      "4. Consider machine learning integration for prediction",
+      "5. Use functional data analysis for complex trajectories"
+    )
+  )
+  
+  for (section in names(best_practices)) {
+    cat("\n", section, ":\n", sep = "")
+    for (point in best_practices[[section]]) {
+      cat("  ", point, "\n")
+    }
+  }
+  
+  cat("\n", "-" * 40, "\n")
+  cat("SOFTWARE RECOMMENDATIONS:\n\n")
+  
+  software_recommendations <- data.frame(
+    Task = c("Basic LMM", 
+             "Complex covariance", 
+             "GLMM", 
+             "NLME", 
+             "Bayesian",
+             "Diagnostics",
+             "Visualization"),
+    Package = c("lme4", "nlme", "glmmTMB", "nlme", "brms", 
+                "performance", "ggeffects"),
+    Function = c("lmer()", "lme()", "glmmTMB()", "nlme()", 
+                 "brm()", "check_model()", "ggpredict()")
+  )
+  
+  print(software_recommendations)
+  
+  cat("\n", "-" * 40, "\n")
+  cat("COMMON PITFALLS TO AVOID:\n\n")
+  
+  pitfalls <- c(
+    "1. Ignoring correlation structure in the data",
+    "2. Overfitting with too many random effects",
+    "3. Ignoring missing data mechanisms",
+    "4. Incorrect degrees of freedom for inference",
+    "5. Not checking model assumptions",
+    "6. Interpreting random effects as fixed effects",
+    "7. Not accounting for multiple testing",
+    "8. Ignoring computational limitations"
+  )
+  
+  for (pitfall in pitfalls) {
+    cat(pitfall, "\n")
+  }
+  
+  cat("\n", "=" * 70, "\n")
+  cat("CONCLUSION\n")
+  cat("=" * 70, "\n\n")
+  
+  conclusion_text <- paste(
+    "Random coefficient regression models provide a powerful and flexible framework",
+    "for analyzing repeated measurements and clustered data. Their ability to",
+    "capture both population trends and individual heterogeneity makes them",
+    "indispensable tools in biomedical research.",
+    "",
+    "This comprehensive review has demonstrated the full spectrum of applications,",
+    "from clinical trials and growth studies to biomarker discovery. The",
+    "accompanying R code provides a complete workflow that researchers can",
+    "adapt for their own studies.",
+    "",
+    "Key to successful implementation is careful model specification,",
+    "thorough diagnostic checking, appropriate inference, and transparent",
+    "reporting. With the tools and techniques presented here, researchers",
+    "can extract maximum information from their longitudinal data while",
+    "providing robust and reproducible results.",
+    "",
+    sep = "\n"
+  )
+  
+  cat(conclusion_text)
+  
+  # Create final checklist
+  cat("\n", "-" * 40, "\n")
+  cat("FINAL CHECKLIST FOR ANALYSIS:\n\n")
+  
+  checklist <- data.frame(
+    Step = c(
+      "1. Exploratory data analysis",
+      "2. Model specification",
+      "3. Model fitting",
+      "4. Model comparison",
+      "5. Diagnostic checking",
+      "6. Inference",
+      "7. Sensitivity analysis",
+      "8. Reporting",
+      "9. Reproducibility"
+    ),
+    Completed = rep("[ ]", 9)
+  )
+  
+  print(checklist)
+  
+  cat("\n", "=" * 70, "\n")
+  cat("ANALYSIS COMPLETE\n")
+  cat("=" * 70, "\n")
+}
+
+# Generate final report
+generate_final_report()
+```
+
+## References
+
+```{r references_final, echo=FALSE, results='asis'}
+cat("
+## Core References
+
+1. **Laird, N. M., & Ware, J. H. (1982).** Random-effects models for longitudinal data. *Biometrics*, 38(4), 963-974.
+
+2. **Pinheiro, J. C., & Bates, D. M. (2000).** *Mixed-Effects Models in S and S-PLUS*. Springer.
+
+3. **Fitzmaurice, G. M., Laird, N. M., & Ware, J. H. (2011).** *Applied Longitudinal Analysis* (2nd ed.). Wiley.
+
+4. **Diggle, P. J., Heagerty, P., Liang, K.-Y., & Zeger, S. L. (2002).** *Analysis of Longitudinal Data* (2nd ed.). Oxford University Press.
+
+5. **Bates, D., Mächler, M., Bolker, B., & Walker, S. (2015).** Fitting linear mixed-effects models using lme4. *Journal of Statistical Software*, 67(1), 1-48.
+
+## Methodological Extensions
+
+6. **Verbeke, G., & Molenberghs, G. (2000).** *Linear Mixed Models for Longitudinal Data*. Springer.
+
+7. **Raudenbush, S. W., & Bryk, A. S. (2002).** *Hierarchical Linear Models: Applications and Data Analysis Methods* (2nd ed.). Sage.
+
+8. **Goldstein, H. (2011).** *Multilevel Statistical Models* (4th ed.). Wiley.
+
+9. **Davidian, M., & Giltinan, D. M. (1995).** *Nonlinear Models for Repeated Measurement Data*. Chapman & Hall.
+
+## Software and Implementation
+
+10. **Bürkner, P. C. (2017).** brms: An R package for Bayesian multilevel models using Stan. *Journal of Statistical Software*, 80(1), 1-28.
+
+11. **Brooks, M. E., et al. (2017).** glmmTMB balances speed and flexibility among packages for zero-inflated generalized linear mixed modeling. *The R Journal*, 9(2), 378-400.
+
+12. **Lüdecke, D., et al. (2021).** performance: An R package for assessment, comparison and testing of statistical models. *Journal of Open Source Software*, 6(60), 3139.
+
+## Applications
+
+13. **Hedeker, D., & Gibbons, R. D. (2006).** *Longitudinal Data Analysis*. Wiley.
+
+14. **Rizopoulos, D. (2012).** *Joint Models for Longitudinal and Time-to-Event Data*. Chapman & Hall/CRC.
+
+15. **Molenberghs, G., & Kenward, M. G. (2007).** *Missing Data in Clinical Studies*. Wiley.
+
+## Diagnostic and Validation
+
+16. **Nobre, J. S., & Singer, J. M. (2007).** Residual analysis for linear mixed models. *Biometrical Journal*, 49(6), 863-875.
+
+17. **Kenward, M. G., & Roger, J. H. (1997).** Small sample inference for fixed effects from restricted maximum likelihood. *Biometrics*, 53(3), 983-997.
+
+18. **Self, S. G., & Liang, K.-Y. (1987).** Asymptotic properties of maximum likelihood estimators and likelihood ratio tests under nonstandard conditions. *Journal of the American Statistical Association*, 82(398), 605-610.
+")
+```
+
+---
