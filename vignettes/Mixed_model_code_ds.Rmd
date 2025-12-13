@@ -802,11 +802,13 @@ analyze_pain_trial <- function(pain_data,
     mutate(pain_score_locf = zoo::na.locf(.data[[primary_endpoint]], na.rm = FALSE)) %>%
     ungroup()
   
-  model_locf <- update(model_primary, 
-                       data = pain_data_locf,
-                       formula = as.formula(paste("pain_score_locf ~", 
-                                                 paste(all.vars(formula(model_primary))[-1], 
-                                                       collapse = " + "))))
+  # Update the primary model to use LOCF outcome while preserving random effects
+  model_locf <- tryCatch({
+    update(model_primary, data = pain_data_locf, formula = as.formula("pain_score_locf ~ ."))
+  }, error = function(e) {
+    cat("Updating model with LOCF data failed:", e$message, "\n")
+    NULL
+  })
   
   results$sensitivity <- list(
     complete_case = model_complete,
